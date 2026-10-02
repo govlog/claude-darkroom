@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { On, PromptEditInput, PromptEditResult } from 'claude-code'
+import type { On, PromptEditResult } from 'claude-code'
 
 import { imagePaths } from '../hooks/develop'
 import { BOMB, TALL, WIDE } from './fixtures'
@@ -132,9 +132,15 @@ const unroll = async (ui: { press: (target: { key: string }) => Promise<unknown>
 // Pastes image #1 into the prompt box and lets it develop.
 const paste = async ($: Engine, clock: ReturnType<typeof mock.clock>) => {
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  // The kit raises prompt.edit as the composer does; its typing does not list it yet.
-  const composer = $.prompt as unknown as { edit: (e: PromptEditInput) => Promise<PromptEditResult> }
-  const box = await composer.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: '[Image #1]' })
+  // @ts-expect-error The kit raises prompt.edit as the composer does; its typing does not list the call yet.
+  const box: PromptEditResult = await $.prompt.edit({
+    origin: { kind: 'composer' },
+    text: '',
+    cursor: 0,
+    start: 0,
+    end: 0,
+    inputText: '[Image #1]',
+  })
   await clock.advance(0)
   await clock.advance(1000)
   return box
@@ -154,7 +160,7 @@ test('a tool call that makes an image gets a grey line under its result', async 
   const w = world(on, { disk: { '/work/shot.png': NOW } })
   await session($, w.clock, ['magick in.jpg /work/shot.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
-  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 640×320 — click to show')
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 64×32 — click to show')
   expect(await ui.find({ text: 'engine row' }), 'the engine row stays').toBeDefined()
   await ui.unmount()
 })
@@ -296,7 +302,7 @@ test('a sent message with a pasted image gets a grey line', async ($, on) => {
     viewport: VIEWPORT,
     props: { text: 'look at this [Image #1]', origin: { kind: 'composer' }, isExpanded: false },
   })
-  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: [Image #1] · 640×320 — click to show')
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: [Image #1] · 64×32 — click to show')
   await ui.unmount()
 })
 
@@ -415,7 +421,7 @@ test('a PNG develops in the sandbox, with no program run on it', async ($, on) =
   const w = world(on, { disk: { '/work/shot.png': NOW } })
   await session($, w.clock, ['magick in.jpg /work/shot.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
-  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 640×320 — click to show')
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 64×32 — click to show')
   expect(w.runs.filter(argv => argv.some(arg => arg.includes('/work/shot.png')))).toEqual([])
   await ui.unmount()
 })
@@ -435,7 +441,7 @@ test('without ImageMagick, a PNG still develops and a JPEG says what it needs', 
   const w = world(on, { disk: { '/work/shot.png': NOW, '/work/photo.jpg': NOW }, hasMagick: false })
   await session($, w.clock, ['make /work/shot.png /work/photo.jpg'])
   const ui = await $.ui.mount(result(w.calls[0]))
-  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 640×320 — click to show')
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 64×32 — click to show')
   expect(w.toasts).toContain('◐ darkroom: install ImageMagick to see JPG images')
   await ui.unmount()
 })

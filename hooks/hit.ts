@@ -118,7 +118,8 @@ const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
     }
     if (slot < 0) {
       // `+N ▶` turns the page; anywhere else in the strip folds the darkroom.
-      const isMore = hit.more > 0 && event.x >= hit.count * hit.cell && event.x < hit.count * hit.cell + `+${hit.more} ▶`.length
+      const moreWidth = String(hit.more).length + 3 // "+", the count, " ▶"
+      const isMore = hit.more > 0 && event.x >= hit.count * hit.cell && event.x < hit.count * hit.cell + moreWidth
       if (isMore) {
         surface.post({ ids: hit.ids, pick: hit.next })
       } else if (event.y >= 0 && event.y < hit.rows) {

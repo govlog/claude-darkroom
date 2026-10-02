@@ -40,58 +40,54 @@ const huffman = (lengths: ArrayLike<number>): Huffman => {
 const FIXED_LITERALS = huffman(Array.from({ length: 288 }, (_, i) => (i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8)))
 const FIXED_DISTANCES = huffman(new Array(30).fill(5))
 
-/** Reads a deflate stream bit by bit, least significant bit first. */
-class Bits {
-  private at: number
-  private byte = 0
-  private left = 0
+/** A deflate stream read bit by bit, least significant bit first. */
+type Bits = {
+  bit: () => number
+  bits: (count: number) => number
+  bytes: (count: number) => Uint8Array
+  symbol: (code: Huffman) => number
+}
 
-  constructor(
-    private readonly data: Uint8Array,
-    start: number,
-  ) {
-    this.at = start
-  }
-
-  bit(): number {
-    if (this.left === 0) {
-      if (this.at >= this.data.length) {
+const readBits = (data: Uint8Array, start: number): Bits => {
+  let at = start
+  let byte = 0
+  let left = 0
+  const bit = () => {
+    if (left === 0) {
+      if (at >= data.length) {
         throw new Error('png: the image data ends too soon')
       }
-      this.byte = this.data[this.at]!
-      this.at += 1
-      this.left = 8
+      byte = data[at]!
+      at += 1
+      left = 8
     }
-    const bit = this.byte & 1
-    this.byte >>= 1
-    this.left -= 1
-    return bit
+    const value = byte & 1
+    byte >>= 1
+    left -= 1
+    return value
   }
-
-  bits(count: number): number {
+  const bits = (count: number) => {
     let value = 0
     for (let i = 0; i < count; i += 1) {
-      value |= this.bit() << i
+      value |= bit() << i
     }
     return value
   }
-
   // A stored block starts on a byte boundary.
-  bytes(count: number): Uint8Array {
-    this.left = 0
-    if (this.at + count > this.data.length) {
+  const bytes = (count: number) => {
+    left = 0
+    if (at + count > data.length) {
       throw new Error('png: the image data ends too soon')
     }
-    const chunk = this.data.subarray(this.at, this.at + count)
-    this.at += count
+    const chunk = data.subarray(at, at + count)
+    at += count
     return chunk
   }
-
-  symbol(code: Huffman): number {
+  const symbol = (code: Huffman) => {
     let first = 0
     let index = 0
     for (let length = 1; length < 16; length += 1) {
-      first = 2 * first + this.bit()
+      first = 2 * first + bit()
       const count = code.counts[length]!
       if (first < count) {
         return code.symbols[index + first]!
@@ -101,6 +97,7 @@ class Bits {
     }
     throw new Error('png: a bad Huffman code')
   }
+  return { bit, bits, bytes, symbol }
 }
 
 const dynamicCodes = (bits: Bits): [Huffman, Huffman] => {
@@ -143,7 +140,7 @@ export const inflate = (data: Uint8Array, size: number): Uint8Array => {
     throw new Error('png: not a zlib stream')
   }
   const out = new Uint8Array(size)
-  const bits = new Bits(data, 2)
+  const bits = readBits(data, 2)
   let at = 0
   for (let isLast = 0; isLast === 0; ) {
     isLast = bits.bit()

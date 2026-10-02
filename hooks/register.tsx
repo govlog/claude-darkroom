@@ -115,8 +115,8 @@ type Post = {
   fold?: boolean
   key?: string
 }
-// The drawing helpers' elements: no Client, which the render hook draws itself.
-type Elements = Omit<ElementTable<'terminal'>, 'Client'>
+// The drawing helpers' elements; the render hook draws the hit layers itself.
+type Elements = ElementTable<'terminal'>
 /** One transcript row's darkroom, as its drawing needs it. */
 type RowView = {
   requestId: string
@@ -293,7 +293,7 @@ export const register: Register = on => {
             </Box>
           )
         })}
-        {hit.role === 'strip' && hit.more > 0 && <Text dimColor>{`+${hit.more} ▶`}</Text>}
+        {hit.role === 'strip' && hit.more > 0 && <Text dimColor>+{hit.more} ▶</Text>}
       </Box>
     )
   }
@@ -817,7 +817,7 @@ export const register: Register = on => {
         strip.map(one => one.id),
       )
     }
-    const { Client, ...els } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
     const { Box, Button } = els
     const view: RowView = {
       requestId: e.requestId,
@@ -862,7 +862,7 @@ export const register: Register = on => {
             <Box>
               {drawStrip(els, view, stripAt)}
               <Box position="absolute" top={0} left={0}>
-                <Client key="strip-hit" module="./hit.ts" width={view.width} height={THUMB.rows + 1} props={stripAt.hit} />
+                <els.Client key="strip-hit" module="./hit.ts" width={view.width} height={THUMB.rows + 1} props={stripAt.hit} />
               </Box>
             </Box>
             {current !== undefined && viewAt !== undefined && (
@@ -873,7 +873,7 @@ export const register: Register = on => {
                     shut: () => setAt(() => -1),
                   })}
                   <Box position="absolute" top={1} left={0}>
-                    <Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows} props={viewAt.hit} />
+                    <els.Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows} props={viewAt.hit} />
                   </Box>
                 </Box>
               </Box>

@@ -11,11 +11,7 @@ for (const fixture of FIXTURES) {
   test(`a PNG decodes to the grid ImageMagick reads from it: ${fixture.name}, side ${fixture.side}`, async () => {
     const grid = decodePng(Uint8Array.fromBase64(fixture.png), fixture.side, MAX_PIXELS, PAPER)
     expect([grid.width, grid.height]).toEqual([fixture.width, fixture.height])
-    if (fixture.hex !== undefined) {
-      expect(hex(grid.rgb)).toBe(fixture.hex)
-    } else {
-      expect(await sha256(grid.rgb)).toBe(fixture.sha256)
-    }
+    expect(await sha256(grid.rgb)).toBe(fixture.sha256)
   })
 }
 
