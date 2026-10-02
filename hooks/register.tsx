@@ -1,17 +1,20 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { ElementTable, Register, RenderElement, RenderSurface } from 'claude-code'
+import type { ElementTable, Register, RenderSurface } from 'claude-code'
 
 import type { DarkroomSettings, Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
 import type { Cells, Grid } from './develop'
 import { MENU_IMAGE, MENU_PATH } from './hit'
 import type { Hit, Item } from './hit'
+import { decodePng, pngHeader } from './png'
 
 // The roll. ponytail: each print keeps a small pixel grid in session state;
 // 64 prints stay near half a megabyte. Move the grids to the cache if it grows.
 const ROLL = 64
 const SIDE = 64 // long side of the pixel grid the develop and the cell fallback paint from
 const MAX_BYTES = 64 * 1024 * 1024
+const MAX_READ = 4 * 1024 * 1024 // what one $.fs.read may hold: a bigger PNG goes to ImageMagick
+const PAPER = 0x141414 // what a transparent pixel is laid over
 const MAX_PIXELS = 64_000_000 // a bigger picture is not decoded: seconds and gigabytes for a preview
 const PASTE_TRIES = 8 // the engine may write a pasted image a moment after its marker lands
 
@@ -45,6 +48,20 @@ const SHUT = ['x', 'q', 'backspace']
 
 const PLACEHOLDER = /\[Image #(\d+)\]/g
 const ROLL_LINE = /^(?:darkroom: )*\d+ prints? on the roll\.$/
+// The ImageMagick decoder each extension gets, named in front of the path: it
+// never guesses a format from a file's bytes. PNG has its own decoder here.
+const CODERS: Record<string, string> = {
+  png: 'PNG',
+  jpg: 'JPEG',
+  jpeg: 'JPEG',
+  gif: 'GIF',
+  webp: 'WEBP',
+  avif: 'AVIF',
+  svg: 'MSVG',
+  bmp: 'BMP',
+  tif: 'TIFF',
+  tiff: 'TIFF',
+}
 // Tool arguments that hold file contents, not paths the call worked on.
 const SKIP = new Set(['tool', 'tool_use_id', 'agentId', 'content', 'old_string', 'new_string'])
 
@@ -98,7 +115,8 @@ type Post = {
   fold?: boolean
   key?: string
 }
-type Elements = ElementTable<'terminal'>
+// The drawing helpers' elements: no Client, which the render hook draws itself.
+type Elements = Omit<ElementTable<'terminal'>, 'Client'>
 /** One transcript row's darkroom, as its drawing needs it. */
 type RowView = {
   requestId: string
@@ -241,59 +259,52 @@ export const register: Register = on => {
     </els.Box>
   )
 
-  // The thumbnails side by side, under the hit layer that takes the clicks
-  // and the hover.
-  const drawStrip = (els: Elements, row: RowView, layout: ReturnType<typeof stripLayout>, layer: RenderElement) => {
+  // The thumbnails side by side; the render hook lays the hit layer over them.
+  const drawStrip = (els: Elements, row: RowView, layout: ReturnType<typeof stripLayout>) => {
     const { Box, Raster, Text } = els
     const { first, visible, hit } = layout
     return (
-      <Box>
-        <Box gap={1}>
-          {visible.map((print, i) => {
-            const box = fit(print.width, print.height, THUMB.columns, THUMB.rows)
-            const isCurrent = first + i === row.at
-            if (!row.hasDeveloped) {
-              mounted.set(`${row.requestId}/${print.id}`, box)
-            }
-            return (
-              <Box key={`frame-${print.id}`} flexDirection="column" width={THUMB.columns}>
-                <Box height={THUMB.rows} width={THUMB.columns} alignItems="center" justifyContent="center">
-                  {row.hasDeveloped ? (
-                    picture(els, print, box, `thumb-${print.id}`)
-                  ) : (
-                    <Raster key={`dev-${print.id}`} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 0)} />
-                  )}
-                </Box>
-                {first + i === row.hovered.at ? (
-                  <Box>
-                    {menuEntry(els, MENU_IMAGE, row.hovered.item === 'image')}
-                    {menuEntry(els, MENU_PATH, row.hovered.item === 'path')}
-                  </Box>
+      <Box gap={1}>
+        {visible.map((print, i) => {
+          const box = fit(print.width, print.height, THUMB.columns, THUMB.rows)
+          const isCurrent = first + i === row.at
+          if (!row.hasDeveloped) {
+            mounted.set(`${row.requestId}/${print.id}`, box)
+          }
+          return (
+            <Box key={`frame-${print.id}`} flexDirection="column" width={THUMB.columns}>
+              <Box height={THUMB.rows} width={THUMB.columns} alignItems="center" justifyContent="center">
+                {row.hasDeveloped ? (
+                  picture(els, print, box, `thumb-${print.id}`)
                 ) : (
-                  <Text color={isCurrent ? AMBER : undefined} dimColor={!isCurrent} wrap="truncate-middle">
-                    {label(print)}
-                  </Text>
+                  <Raster key={`dev-${print.id}`} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 0)} />
                 )}
               </Box>
-            )
-          })}
-          {hit.role === 'strip' && hit.more > 0 && <Text dimColor>{`+${hit.more} ▶`}</Text>}
-        </Box>
-        <Box position="absolute" top={0} left={0}>
-          {layer}
-        </Box>
+              {first + i === row.hovered.at ? (
+                <Box>
+                  {menuEntry(els, MENU_IMAGE, row.hovered.item === 'image')}
+                  {menuEntry(els, MENU_PATH, row.hovered.item === 'path')}
+                </Box>
+              ) : (
+                <Text color={isCurrent ? AMBER : undefined} dimColor={!isCurrent} wrap="truncate-middle">
+                  {label(print)}
+                </Text>
+              )}
+            </Box>
+          )
+        })}
+        {hit.role === 'strip' && hit.more > 0 && <Text dimColor>{`+${hit.more} ▶`}</Text>}
       </Box>
     )
   }
 
-  // The picture on show in its dark panel, the toolbar on top, under the hit
-  // layer that takes the clicks on and beside the picture.
+  // The picture on show with its toolbar and its caption: the content of the
+  // dark panel the render hook places, its hit layer over the picture.
   const drawViewer = (
     els: Elements,
     row: RowView,
     current: Print,
     layout: ReturnType<typeof viewerLayout>,
-    layer: RenderElement,
     acts: { step: (by: number) => unknown; shut: () => unknown },
   ) => {
     const { Box, Text } = els
@@ -303,38 +314,33 @@ export const register: Register = on => {
     const meta = `${current.width}×${current.height} · ${current.format} · ${humanSize(current.bytes)}`
     const hasHint = title.length + meta.length + HINT.length + 5 <= panel
     return (
-      <Box width={row.width - 2} justifyContent="center" marginTop={1}>
-        <Box flexDirection="column" width={panel} backgroundColor={PANEL}>
-          <Box width={panel} justifyContent="space-between" paddingX={1}>
-            <Box>
-              {toolButton(els, 'prev', ' ◀ ', () => acts.step(-1))}
-              <Text>{` ${String(row.at + 1).padStart(String(count).length)}/${count} `}</Text>
-              {toolButton(els, 'next', ' ▶ ', () => acts.step(1))}
-            </Box>
-            <Box gap={1}>
-              {toolButton(els, 'copy-image', ' ⧉ image ', () => act.copyImage(current))}
-              {toolButton(els, 'copy-path', ' ⎘ path ', press => act.copyPath(current, press.surface))}
-              {toolButton(els, 'open', ' ↗ open ', () => act.open(current))}
-              {toolButton(els, 'shut', ' ✕ ', acts.shut)}
-            </Box>
+      <Box flexDirection="column" width={panel}>
+        <Box width={panel} justifyContent="space-between" paddingX={1}>
+          <Box>
+            {toolButton(els, 'prev', ' ◀ ', () => acts.step(-1))}
+            <Text>{` ${String(row.at + 1).padStart(String(count).length)}/${count} `}</Text>
+            {toolButton(els, 'next', ' ▶ ', () => acts.step(1))}
           </Box>
-          <Box key="frame" width={panel} height={frameRows} justifyContent="center" alignItems="center">
-            {picture(els, current, box, 'view')}
+          <Box gap={1}>
+            {toolButton(els, 'copy-image', ' ⧉ image ', () => act.copyImage(current))}
+            {toolButton(els, 'copy-path', ' ⎘ path ', press => act.copyPath(current, press.surface))}
+            {toolButton(els, 'open', ' ↗ open ', () => act.open(current))}
+            {toolButton(els, 'shut', ' ✕ ', acts.shut)}
           </Box>
-          <Box width={panel} paddingX={1} justifyContent="space-between">
-            <Box gap={1} flexShrink={1}>
-              <Text bold wrap="truncate-middle">
-                {title}
-              </Text>
-              <Text dimColor wrap="truncate">
-                {meta}
-              </Text>
-            </Box>
-            {hasHint && <Text dimColor>{HINT}</Text>}
+        </Box>
+        <Box key="frame" width={panel} height={frameRows} justifyContent="center" alignItems="center">
+          {picture(els, current, box, 'view')}
+        </Box>
+        <Box width={panel} paddingX={1} justifyContent="space-between">
+          <Box gap={1} flexShrink={1}>
+            <Text bold wrap="truncate-middle">
+              {title}
+            </Text>
+            <Text dimColor wrap="truncate">
+              {meta}
+            </Text>
           </Box>
-          <Box position="absolute" top={1} left={0}>
-            {layer}
-          </Box>
+          {hasHint && <Text dimColor>{HINT}</Text>}
         </Box>
       </Box>
     )
@@ -364,6 +370,8 @@ export const register: Register = on => {
     const tmp = ((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/+$/, '') || '/tmp'
     const uid = (await $.process.run(['id', '-u']).catch(() => undefined))?.stdout.trim() ?? ''
     const cache = `${(await $.env.get('XDG_CACHE_HOME')) ?? `${home === '' ? '/tmp' : home}/.cache`}/claude-darkroom`
+    // The ImageMagick policy this plugin ships, in magick/policy.xml.
+    const policy = `${$.plugin.root}/magick`
     const hasMagick7 = (await $.process.run(['magick', '-version']).catch(() => undefined))?.exitCode === 0
     const hasMagick6 =
       !hasMagick7 && (await $.process.run(['convert', '-version']).catch(() => undefined))?.exitCode === 0
@@ -412,13 +420,6 @@ export const register: Register = on => {
     // The print for a job: the one on the roll when the file has not changed,
     // else a fresh one, or undefined for anything that is not a usable image.
     const develop = async (job: Job): Promise<Print | undefined> => {
-      if (magick === undefined) {
-        if (!hasWarned) {
-          hasWarned = true
-          $.ui.toast('◐ darkroom: install ImageMagick to develop images')
-        }
-        return undefined
-      }
       const path = await locate(job)
       const stat = path === undefined ? undefined : await $.fs.stat(path, { resolve: true }).catch(() => undefined)
       // Always absolute, so ImageMagick never reads it as a coder prefix or a pipe.
@@ -434,15 +435,50 @@ export const register: Register = on => {
       if (known !== undefined) {
         return known
       }
-      const source = `${real}[0]`
-      const shape = await $.process.run([...magick.identify, '-format', '%w %h %m', source])
+      const extension = real.slice(real.lastIndexOf('.') + 1).toLowerCase()
+      const coder = CODERS[extension]
+      if (coder === undefined) {
+        return undefined
+      }
+      const id = await digest(`${real}:${stat.mtimeMs}`)
+      const print = {
+        id,
+        path: real,
+        verb: job.verb,
+        tool: job.tool,
+        bytes: stat.size,
+        mtimeMs: stat.mtimeMs,
+        at: await $.clock.now(),
+      }
+
+      // A PNG needs no program: it is decoded here, in the mod's sandbox, and
+      // the terminal draws it straight from its file.
+      if (extension === 'png' && stat.size <= MAX_READ) {
+        const file = await $.fs.read(real, { as: 'bytes' })
+        const bytes = Uint8Array.fromBase64(file.base64)
+        const { width, height } = pngHeader(bytes)
+        const grid = decodePng(bytes, SIDE, MAX_PIXELS, PAPER)
+        return { ...print, png: real, width, height, format: 'PNG', grid: grid.rgb.toBase64(), gridWidth: grid.width, gridHeight: grid.height }
+      }
+
+      // Any other format goes to ImageMagick, when it is installed, under the
+      // plugin's own policy: these formats only, no delegate, no network.
+      if (magick === undefined) {
+        if (!hasWarned) {
+          hasWarned = true
+          $.ui.toast(`◐ darkroom: install ImageMagick to see ${extension.toUpperCase()} images`)
+        }
+        return undefined
+      }
+      const run = (argv: string[]) => $.process.run(argv, { env: { MAGICK_CONFIGURE_PATH: policy } })
+      const source = `${coder}:${real}[0]`
+      const shape = await run([...magick.identify, '-format', '%w %h %m', source])
       const [wide, high, format = '?'] = shape.stdout.trim().split(/\s+/)
       const width = Number(wide)
       const height = Number(high)
       if (shape.exitCode !== 0 || !(width > 0 && height > 0) || width * height > MAX_PIXELS) {
         return undefined
       }
-      const id = await digest(`${real}:${stat.mtimeMs}`)
       let png = real
       if (format !== 'PNG') {
         // ponytail: converted PNGs stay in the cache; prune it by age if it grows.
@@ -451,13 +487,13 @@ export const register: Register = on => {
           await $.fs.write(`${cache}/.keep`, '')
           hasCache = true
         }
-        const made = await $.process.run([...magick.convert, source, '-resize', '2048x2048>', png])
+        const made = await run([...magick.convert, source, '-resize', '2048x2048>', `PNG:${png}`])
         if (made.exitCode !== 0) {
           return undefined
         }
       }
       const grid = gridSize(width, height, SIDE)
-      const pixmap = await $.process.run([
+      const pixmap = await run([
         ...magick.convert,
         source,
         ...['-background', '#141414', '-flatten'],
@@ -466,17 +502,11 @@ export const register: Register = on => {
       ])
       const pixels = parsePpm(pixmap.stdout)
       return {
-        id,
-        path: real,
+        ...print,
         png,
-        verb: job.verb,
-        tool: job.tool,
         width,
         height,
         format,
-        bytes: stat.size,
-        mtimeMs: stat.mtimeMs,
-        at: await $.clock.now(),
         grid: pixels.rgb.toBase64(),
         gridWidth: pixels.width,
         gridHeight: pixels.height,
@@ -787,8 +817,8 @@ export const register: Register = on => {
         strip.map(one => one.id),
       )
     }
-    const els = $.ui.resolve(e)
-    const { Box, Button, Client } = $.ui.resolve(e)
+    const { Client, ...els } = $.ui.resolve(e)
+    const { Box, Button } = els
     const view: RowView = {
       requestId: e.requestId,
       strip,
@@ -829,25 +859,25 @@ export const register: Register = on => {
         )}
         {isOpen && (
           <Box flexDirection="column" marginLeft={2}>
-            {drawStrip(
-              els,
-              view,
-              stripAt,
-              <Client key="strip-hit" module="./hit.ts" width={view.width} height={THUMB.rows + 1} props={stripAt.hit} />,
+            <Box>
+              {drawStrip(els, view, stripAt)}
+              <Box position="absolute" top={0} left={0}>
+                <Client key="strip-hit" module="./hit.ts" width={view.width} height={THUMB.rows + 1} props={stripAt.hit} />
+              </Box>
+            </Box>
+            {current !== undefined && viewAt !== undefined && (
+              <Box width={view.width - 2} justifyContent="center" marginTop={1}>
+                <Box flexDirection="column" width={viewAt.panel} backgroundColor={PANEL}>
+                  {drawViewer(els, view, current, viewAt, {
+                    step: by => setAt(now => Math.max(0, Math.min(strip.length - 1, now + by))),
+                    shut: () => setAt(() => -1),
+                  })}
+                  <Box position="absolute" top={1} left={0}>
+                    <Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows} props={viewAt.hit} />
+                  </Box>
+                </Box>
+              </Box>
             )}
-            {current !== undefined &&
-              viewAt !== undefined &&
-              drawViewer(
-                els,
-                view,
-                current,
-                viewAt,
-                <Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows} props={viewAt.hit} />,
-                {
-                  step: by => setAt(now => Math.max(0, Math.min(strip.length - 1, now + by))),
-                  shut: () => setAt(() => -1),
-                },
-              )}
           </Box>
         )}
       </Box>

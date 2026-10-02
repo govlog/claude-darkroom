@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On, PromptEditInput, PromptEditResult } from 'claude-code'
 
 import { imagePaths } from '../hooks/develop'
+import { BOMB, TALL, WIDE } from './fixtures'
 
 const NOW = 1_700_000_000_000
 const CWD = '/work'
@@ -16,12 +17,16 @@ type World = {
   said?: string
   system?: string
   store?: Record<string, unknown>
+  hasMagick?: boolean
 }
 
 // What lies beneath the plugin: a disk (path → mtime), ImageMagick, a
 // clipboard, a terminal, the plugin's store, the engine's own rows, and tools
 // that answer `said`.
-const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linux', store = {} }: World) => {
+const world = (
+  on: On,
+  { disk, term = 'xterm-ghostty', said = '', system = 'Linux', store = {}, hasMagick = true }: World,
+) => {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { HOME: '/home/t', TERM: term, WAYLAND_DISPLAY: 'wayland-0' })
   const saved: Record<string, unknown> = { ...store }
@@ -32,6 +37,7 @@ const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linu
   })
   const calls: string[] = []
   const runs: string[][] = []
+  const envs: Record<string, string>[] = []
   const toasts: string[] = []
   const copies: string[] = []
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -47,17 +53,25 @@ const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linu
   on('fs.list', ($, e) => ({
     value: e.path === '/tmp/claude-1000' ? [{ name: '-work', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }] : [],
   }))
+  // A PNG's bytes: the tall one, the bomb, or a plain wide picture.
+  on('fs.read', ($, e) => ({
+    value: { base64: e.path.includes('tall') ? TALL : e.path.includes('bomb') ? BOMB : WIDE },
+  }))
   on('fs.write', () => ({ value: undefined }))
   on('process.run', ($, e) => {
     runs.push([...e.argv])
+    envs.push({ ...e.init?.env })
     const line = e.argv.join(' ')
+    if (!hasMagick && line.endsWith('-version')) {
+      return { value: { exitCode: 127, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const stdout =
       line === 'uname -s'
         ? `${system}\n`
         : line === 'id -u'
           ? '1000\n'
           : line.includes('identify')
-            ? line.includes('bomb') ? '50000 50000 PNG' : line.includes('tall') ? '320 640 PNG' : '640 320 PNG'
+            ? '640 320 JPEG'
             : line.endsWith('ppm:-')
               ? PIXMAP
               : ''
@@ -85,7 +99,7 @@ const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linu
     copies.push(e.text)
     return { value: { isCopied: true as const } }
   })
-  return { clock, calls, runs, toasts, copies, saved }
+  return { clock, calls, runs, envs, toasts, copies, saved }
 }
 
 // Starts the session, has the model run `commands`, and lets every develop finish.
@@ -394,7 +408,35 @@ test('a decompression bomb is never decoded', async ($, on) => {
   await session($, w.clock, ['make /work/bomb.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
   expect(await ui.find({ key: 'toggle' })).toBeUndefined()
-  expect(w.runs.some(argv => argv.includes('ppm:-')), 'no full decode').toBe(false)
+  await ui.unmount()
+})
+
+test('a PNG develops in the sandbox, with no program run on it', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW } })
+  await session($, w.clock, ['magick in.jpg /work/shot.png'])
+  const ui = await $.ui.mount(result(w.calls[0]))
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 640×320 — click to show')
+  expect(w.runs.filter(argv => argv.some(arg => arg.includes('/work/shot.png')))).toEqual([])
+  await ui.unmount()
+})
+
+test("ImageMagick runs only under darkroom's policy, with the decoder the extension names", async ($, on) => {
+  const w = world(on, { disk: { '/work/photo.jpg': NOW } })
+  await session($, w.clock, ['make /work/photo.jpg'])
+  const calls = w.runs.flatMap((argv, i) => (argv.some(arg => arg.includes('/work/photo.jpg')) ? [{ argv, env: w.envs[i] }] : []))
+  expect(calls.length).toBeGreaterThan(0)
+  for (const { argv, env } of calls) {
+    expect(argv).toContain('JPEG:/work/photo.jpg[0]')
+    expect(env?.MAGICK_CONFIGURE_PATH?.endsWith('/magick'), 'the policy folder').toBe(true)
+  }
+})
+
+test('without ImageMagick, a PNG still develops and a JPEG says what it needs', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW, '/work/photo.jpg': NOW }, hasMagick: false })
+  await session($, w.clock, ['make /work/shot.png /work/photo.jpg'])
+  const ui = await $.ui.mount(result(w.calls[0]))
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: shot.png · 640×320 — click to show')
+  expect(w.toasts).toContain('◐ darkroom: install ImageMagick to see JPG images')
   await ui.unmount()
 })
 

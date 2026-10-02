@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  darkroom's ImageMagick policy, read through MAGICK_CONFIGURE_PATH. It only
+  adds limits to the system's own policy:
+  - the image formats darkroom shows and nothing else (MVG only as the inner
+    step of the SVG renderer: what an SVG could call through it stays closed);
+  - no delegate program, no network, no indirect file lists;
+  - bounded memory, disk, size and time.
+-->
+<policymap>
+  <policy domain="resource" name="memory" value="256MiB"/>
+  <policy domain="resource" name="map" value="512MiB"/>
+  <policy domain="resource" name="disk" value="1GiB"/>
+  <policy domain="resource" name="area" value="64MP"/>
+  <policy domain="resource" name="width" value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="time" value="30"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="path" rights="none" pattern="@*"/>
+  <policy domain="coder" rights="none" pattern="*"/>
+  <policy domain="coder" rights="read | write" pattern="{PNG,JPEG,GIF,WEBP,AVIF,HEIC,SVG,MSVG,MVG,BMP,TIFF,PPM,PNM}"/>
+</policymap>

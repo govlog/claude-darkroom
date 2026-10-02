@@ -27,20 +27,9 @@ magick -size 1200x720 xc:'#16181d' \
   -annotate +620+660 'Thu' -annotate +780+660 'Fri' -annotate +940+660 'Sat' \
   dashboard.png
 
-cat > aperture.svg <<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="-256 -256 512 512">
-  <rect x="-256" y="-256" width="512" height="512" fill="#141414"/>
-  <circle r="180" fill="#f5a623"/>
-  <g fill="#141414">
-    <polygon points="0,-60 52,-30 120,-140 40,-176"/>
-    <polygon points="52,-30 52,30 176,40 160,-90"/>
-    <polygon points="52,30 0,60 40,176 140,120"/>
-    <polygon points="0,60 -52,30 -120,140 -40,176"/>
-    <polygon points="-52,30 -52,-30 -176,-40 -160,90"/>
-    <polygon points="-52,-30 0,-60 -40,-176 -140,-120"/>
-  </g>
-</svg>
-SVG
+magick -size 512x512 xc:'#141414' -fill '#f5a623' -draw 'circle 256,256 256,76' \
+  -fill '#141414' -draw 'polygon 256,196 308,226 308,286 256,316 204,286 204,226' \
+  aperture.gif
 
 magick -size 640x960 gradient:'#0b1026'-'#2b3a67' \
   \( -size 640x960 xc:black -seed 7 +noise Random -channel G -separate +channel -threshold 99.7% \) -compose screen -composite \
@@ -50,6 +39,6 @@ magick -size 640x960 gradient:'#0b1026'-'#2b3a67' \
 
 magick -size 900x900 -seed 42 plasma:fractal -blur 0x2 -modulate 100,150 texture.webp
 
-magick -size 64x64 xc:none -fill '#f5a623' -draw 'circle 32,32 32,4' -fill '#141414' -draw 'circle 32,32 32,18' icon.png
+magick -size 64x64 xc:none -fill '#f5a623' -draw 'circle 32,32 32,4' -fill '#141414' -draw 'circle 32,32 32,18' ring.png
 
 realpath ./*
