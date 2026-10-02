@@ -596,7 +596,7 @@ export const register: Register = on => {
       },
       copyPath: async (print, surface) => {
         const copied = await $.ui.copy({ text: print.path, surface })
-        $.ui.toast(copied.isCopied ? `◐ path copied: ${shown(print.path)}` : `◐ darkroom: ${copied.reason}`)
+        $.ui.toast(copied.isCopied ? `◐ path copied: ${print.path}` : `◐ darkroom: ${copied.reason}`)
       },
       // `open` hands the file on and returns; on Linux the viewer starts in a
       // session of its own, so it outlives the call.
