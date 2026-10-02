@@ -8,7 +8,7 @@
     {
       "name": "darkroom",
       "description": "The images Claude reads, writes or makes, and the ones you paste, as a film strip right in the chat: a grey line to unroll, a viewer to browse, a develop under a red safelight (kitty graphics: Ghostty, kitty).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "govlog"
       },
