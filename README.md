@@ -54,6 +54,14 @@ Or run it from a clone: `claude --plugin-dir /path/to/claude-darkroom`.
 - The rows are `ui.render` hooks on tool results, tool groups, your messages and the output of `/darkroom`. The pictures are `Image` elements that the terminal reads from disk; a clear `Client` layer over them takes the clicks, the hover and the keys.
 - Nothing leaves your machine.
 
+## What it runs and touches
+
+Everything stays on your machine; darkroom sends nothing anywhere.
+
+- **Runs**, by argument vector: ImageMagick (`magick`, or `convert` and `identify`) on the images it finds; `uname -s` and `id -u` once per session; `sh -c` with a fixed script for the clipboard (`osascript`, `wl-copy` or `xclip`) and to start your opener (`open`, `xdg-open` or the one you set) detached, the image path always passed as an argument.
+- **Reads** the images a tool call names, the images you paste from the engine's folder for them, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`, `XDG_CACHE_HOME`.
+- **Writes** PNG copies of non-PNG images to `~/.cache/claude-darkroom` (or `$XDG_CACHE_HOME/claude-darkroom`), and a small pixel grid per image in the session's state.
+
 ## Limits
 
 - A mod sees no click on the other rows of the chat. A viewer closes on a click beside its picture, when another viewer opens, and when you send a prompt.

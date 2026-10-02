@@ -1,1 +1,5 @@
-{ "modules": ["./register.tsx"] }
+{
+  "description": "darkroom: a hooks module of function hooks (see README).",
+  "hooks": {},
+  "modules": ["./register.tsx"]
+}
