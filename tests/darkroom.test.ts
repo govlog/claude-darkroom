@@ -358,6 +358,11 @@ test('resting on a thumbnail offers copy image and copy path', async ($, on) => 
   await ui.advance(600)
   expect(await ui.find({ type: 'Text', text: /⧉ image/ })).toBeDefined()
   expect(await ui.findAll({ in: 'strip-hit', type: 'Text' }), 'the layer over the pictures draws nothing').toHaveLength(0)
+  const lit = async () => (await ui.findAll({ type: 'Text', text: /⧉ image|⎘ path/ })).find(one => one.props.backgroundColor === '#f5a623')?.text
+  await ui.pointer({ type: 'move', x: 12, y: 5, in: 'strip-hit' })
+  expect(await lit(), 'the entry under the pointer lights up').toBe(' ⎘ path ')
+  await ui.pointer({ type: 'move', x: 1, y: 5, in: 'strip-hit' })
+  expect(await lit()).toBe(' ⧉ image ')
   await ui.pointer({ type: 'up', x: 1, y: 5, in: 'strip-hit' })
   expect(w.toasts).toContain('◐ image copied: shot.png')
   await ui.pointer({ type: 'up', x: 12, y: 5, in: 'strip-hit' })

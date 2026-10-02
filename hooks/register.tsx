@@ -5,7 +5,7 @@ import type { Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
 import type { Cells, Grid } from './develop'
 import { MENU_IMAGE, MENU_PATH } from './hit'
-import type { Hit } from './hit'
+import type { Hit, Item } from './hit'
 
 // The roll. ponytail: each print keeps a small pixel grid in session state;
 // 64 prints stay near half a megabyte. Move the grids to the cache if it grows.
@@ -34,6 +34,7 @@ const pasteColumns = (px: number) => Math.min(4 * PASTE_ROWS, Math.ceil(px / 6))
 const AMBER = '#f5a623'
 const PANEL = '#161616'
 const LIT = '#2b2b2b'
+const INK = '#141414'
 const HINT = 'click a half to browse · beside to close'
 
 const BACK = ['left', 'h', 'up', 'k']
@@ -72,7 +73,8 @@ const shots = atom({ plugin: 'darkroom', key: 'shots' } as const, [])
 const isUnrolled = atom({ plugin: 'darkroom', key: 'isUnrolled' } as const, null)
 const viewing = atom({ plugin: 'darkroom', key: 'viewing' } as const, -1)
 const isDeveloped = atom({ plugin: 'darkroom', key: 'isDeveloped' } as const, false)
-const hovered = atom({ plugin: 'darkroom', key: 'hovered' } as const, -1)
+const hovered = atom({ plugin: 'darkroom', key: 'hovered' } as const, { at: -1, item: '' })
+const NO_HOVER = { at: -1, item: '' as Item }
 const pasted = atom({ plugin: 'darkroom', key: 'pasted' } as const, [])
 
 /** An image to develop: a path a tool call named, or a pasted image by its number. */
@@ -87,6 +89,7 @@ type Post = {
   pick?: number
   copy?: 'image' | 'path'
   hover?: number
+  item?: Item
   step?: number
   shut?: boolean
   fold?: boolean
@@ -98,7 +101,7 @@ type RowView = {
   requestId: string
   strip: Print[]
   at: number
-  hovered: number
+  hovered: { at: number; item: string }
   width: number
   screenRows: number
   hasDeveloped: boolean
@@ -179,6 +182,13 @@ export const register: Register = (on, options) => {
       <els.Raster key={key} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 1)} />
     )
 
+  // A hover menu's entry: amber while the pointer is on it.
+  const menuEntry = (els: Elements, text: string, isLit: boolean) => (
+    <els.Text backgroundColor={isLit ? AMBER : LIT} color={isLit ? INK : undefined}>
+      {text}
+    </els.Text>
+  )
+
   // The thumbnails side by side, a page at a time so they stay put while
   // browsing, under a clear layer that takes the clicks and the hover.
   const drawStrip = (els: Elements, row: RowView) => {
@@ -216,12 +226,10 @@ export const register: Register = (on, options) => {
                     <Raster key={`dev-${print.id}`} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 0)} />
                   )}
                 </Box>
-                {first + i === row.hovered ? (
+                {first + i === row.hovered.at ? (
                   <Box>
-                    <Text backgroundColor={LIT} color={AMBER}>
-                      {MENU_IMAGE}
-                    </Text>
-                    <Text backgroundColor={LIT}>{MENU_PATH}</Text>
+                    {menuEntry(els, MENU_IMAGE, row.hovered.item === 'image')}
+                    {menuEntry(els, MENU_PATH, row.hovered.item === 'path')}
                   </Box>
                 ) : (
                   <Text color={isCurrent ? AMBER : undefined} dimColor={!isCurrent} wrap="truncate-middle">
@@ -655,12 +663,12 @@ export const register: Register = (on, options) => {
     const printAt = async (at: number) => (await read($, prints)).find(one => one.id === post.ids[at])
     const hover = post.hover
     if (hover !== undefined) {
-      await update($, memberOf(hovered, e), () => hover)
+      await update($, memberOf(hovered, e), () => ({ at: hover, item: post.item ?? '' }))
       return {}
     }
     if (post.fold === true) {
       await update($, memberOf(isUnrolled, e), () => false)
-      await update($, memberOf(hovered, e), () => -1)
+      await update($, memberOf(hovered, e), () => NO_HOVER)
       await update($, view, () => -1)
     } else if (post.shut === true || SHUT.includes(key)) {
       await update($, view, () => -1)
@@ -760,7 +768,7 @@ export const register: Register = (on, options) => {
       requestId: e.requestId,
       strip,
       at,
-      hovered: isOpen ? await read($, memberOf(hovered, e)) : -1,
+      hovered: isOpen ? await read($, memberOf(hovered, e)) : NO_HOVER,
       width: Math.max(THUMB.columns, (e.viewport?.columns ?? 80) - 4),
       screenRows: e.viewport?.rows ?? 40,
       hasDeveloped,
@@ -770,7 +778,7 @@ export const register: Register = (on, options) => {
     const toggle = async () => {
       const willOpen = !((await read($, memberOf(isUnrolled, e))) ?? autoShow)
       await update($, memberOf(isUnrolled, e), () => willOpen)
-      await update($, memberOf(hovered, e), () => -1)
+      await update($, memberOf(hovered, e), () => NO_HOVER)
       if (!willOpen) {
         await setAt(() => -1)
       }

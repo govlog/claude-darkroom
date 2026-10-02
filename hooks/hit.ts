@@ -23,12 +23,25 @@ export type Hit =
 export const MENU_IMAGE = ' ⧉ image '
 export const MENU_PATH = ' ⎘ path '
 
+/** A hover menu's entry, or none. */
+export type Item = 'image' | 'path' | ''
+
 /**
  * The slot under the pointer, how long it has rested there, whether its menu
- * shows, and the props of the last drawing. Changed in place, never through
- * setState: a redraw of the layer would wipe the pictures under it.
+ * shows and which entry the pointer is on, where the pointer last was, and
+ * the props of the last drawing. Changed in place, never through setState: a
+ * redraw of the layer would wipe the pictures under it.
  */
-type Look = { slot: number; ticks: number; isMenu: boolean; hit: Hit }
+type Look = { slot: number; ticks: number; isMenu: boolean; item: Item; x: number; y: number; hit: Hit }
+
+// The menu entry under the pointer in a thumbnail's label row.
+const itemAt = (hit: Extract<Hit, { role: 'strip' }>, x: number, y: number, slot: number): Item => {
+  const offset = x - slot * hit.cell
+  if (y !== hit.rows - 1 || offset < 0) {
+    return ''
+  }
+  return offset < MENU_IMAGE.length ? 'image' : offset < MENU_IMAGE.length + MENU_PATH.length ? 'path' : ''
+}
 
 const HOLD = 5 // ticks of 100 ms the pointer rests on a thumbnail before its menu shows
 
@@ -38,7 +51,7 @@ const HOLD = 5 // ticks of 100 ms the pointer rests on a thumbnail before its me
 const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
   const { Box } = surface.elements
   if (surface.state === undefined) {
-    const look: Look = { slot: -1, ticks: 0, isMenu: false, hit }
+    const look: Look = { slot: -1, ticks: 0, isMenu: false, item: '', x: -1, y: -1, hit }
     surface.setState(look)
     surface.every(100, () => {
       const now = look.hit
@@ -48,7 +61,8 @@ const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
       look.ticks += 1
       if (look.ticks >= HOLD) {
         look.isMenu = true
-        surface.post({ ids: now.ids, hover: now.first + look.slot })
+        look.item = itemAt(now, look.x, look.y, look.slot)
+        surface.post({ ids: now.ids, hover: now.first + look.slot, item: look.item })
       }
     })
   } else {
@@ -86,11 +100,19 @@ const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
     }
     const slot = event.type === 'leave' ? -1 : slotAt(event)
     if (event.type !== 'up') {
+      Object.assign(look, { x: event.x, y: event.y })
       if (slot !== look.slot) {
         if (look.isMenu) {
-          surface.post({ ids: hit.ids, hover: -1 })
+          surface.post({ ids: hit.ids, hover: -1, item: '' })
         }
-        Object.assign(look, { slot, ticks: 0, isMenu: false })
+        Object.assign(look, { slot, ticks: 0, isMenu: false, item: '' })
+      } else if (look.isMenu) {
+        // The entry under the pointer lights up.
+        const item = itemAt(hit, event.x, event.y, slot)
+        if (item !== look.item) {
+          look.item = item
+          surface.post({ ids: hit.ids, hover: hit.first + slot, item })
+        }
       }
       return
     }
@@ -104,13 +126,9 @@ const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
       }
       return
     }
-    const offset = event.x - slot * hit.cell
-    const isMenu =
-      look.slot === slot && look.isMenu && event.y === hit.rows - 1 && offset < MENU_IMAGE.length + MENU_PATH.length
+    const item = look.slot === slot && look.isMenu ? itemAt(hit, event.x, event.y, slot) : ''
     surface.post(
-      isMenu
-        ? { ids: hit.ids, pick: hit.first + slot, copy: offset < MENU_IMAGE.length ? 'image' : 'path' }
-        : { ids: hit.ids, pick: hit.first + slot },
+      item === '' ? { ids: hit.ids, pick: hit.first + slot } : { ids: hit.ids, pick: hit.first + slot, copy: item },
     )
   })
 
