@@ -4,17 +4,16 @@
 
 <p align="center">
   <a href="#install"><img alt="Claude Code mod" src="docs/badges/claude-code.png" height="23"></a>
-  <a href="#the-kitty-graphics-protocol"><img alt="kitty graphics protocol: Ghostty, kitty" src="docs/badges/kitty.png" height="23"></a>
+  <a href="#which-terminal"><img alt="kitty graphics protocol: Ghostty, kitty" src="docs/badges/kitty.png" height="23"></a>
   <img alt="Linux and macOS" src="docs/badges/platforms.png" height="23">
   <img alt="MIT license" src="docs/badges/license.png" height="23">
 </p>
 
-<p align="center">
-  Every image Claude reads, writes or makes, and every image you paste,<br>
-  shows up <b>in the chat itself</b>: a grey line under the row, a film strip, a viewer one click away.
-</p>
+**Claude Code runs in a terminal.** When Claude opens a screenshot, draws a chart or saves an image, all you see is a file name.
 
-![A Claude Code session: the film strip of the six images Claude just made, and the viewer open on one of them](docs/viewer.png)
+**darkroom shows you the picture**, right in the chat, where it happened:
+
+![A Claude Code session: thumbnails of the six images Claude just made, and one of them shown big](docs/viewer.png)
 
 ## Install
 
@@ -25,86 +24,88 @@ In Claude Code, type:
 /plugin install darkroom@claude-darkroom
 ```
 
-Then start a new session. PNG images, the screenshots and renders you see most, work as they are: darkroom decodes them itself. For JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF it also needs ImageMagick:
+Then start a new session. PNG images need nothing more. For JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF, also install ImageMagick:
 
 ```
 brew install imagemagick        # macOS
 sudo apt install imagemagick    # Debian, Ubuntu
 ```
 
-### The kitty graphics protocol
+### Which terminal
 
-> [!IMPORTANT]
-> darkroom shows **real pictures** through the **kitty graphics protocol**: it tells the terminal which image file to draw and where, and the terminal draws its pixels right in the chat. Use a terminal that speaks it: **Ghostty** or **kitty**, on Linux or macOS.
->
-> Any other terminal, tmux or an ssh session gets the pictures in half-block cells instead: coarser, but everything else works.
+You see real pictures in **Ghostty** or **kitty**, on Linux or macOS: they speak the kitty graphics protocol, which lets a program draw images in the terminal. In any other terminal, in tmux or over ssh, you get a coarser preview made of colored blocks. Everything else works the same.
 
-## What you get
+## How to use it
 
-### A line under every row that holds images
+### 1. A line shows under each image Claude touches. Click it.
 
-![A Claude Code session: Claude runs a script that makes six images, and the grey line darkroom: 6 images shows under its row](docs/line.png)
+![A Claude Code session: Claude runs a script that makes six images, and the line darkroom: 6 images shows under it](docs/line.png)
 
-A screenshot Claude read, a chart a script rendered, an export an MCP tool saved: the row gets a grey line. Click it and the film strip unrolls. The first time, the prints develop under a red safelight.
+The thumbnails unroll under the line. The first time, they develop like a photo under a red light.
 
-![The film strip of the six images, unrolled under the grey line](docs/strip.png)
+![The thumbnails of the six images, under the line](docs/strip.png)
 
-### Ask Claude to show you images
+### 2. Click a thumbnail to see it big
+
+The picture opens under the thumbnails, as at the top of this page. Click its right half for the next one, its left half for the one before, or beside it to close. The arrow keys work too.
+
+### 3. Hover a thumbnail to copy it
+
+![The menu of a thumbnail under the pointer, its path entry lit in amber](docs/hover.png)
+
+Rest the pointer on a thumbnail: `⧉ image` copies the picture itself, `⎘ path` copies its path.
+
+### 4. Ask Claude to show you images
 
 ```
 > show me the icons of this project
 > display the 3 screenshots in docs/
 ```
 
-darkroom gives Claude a `show` tool. Claude finds the files and passes their paths, and the strip unrolls under the call, old images as well as new ones. Claude gets back their names, never their pixels.
+Claude finds the files and shows them, old images as well as new ones.
 
-### Copy without opening
+### 5. See your pasted images before you send
 
-![The hover menu of a print, its path entry lit in amber](docs/hover.png)
+![A pasted image shown above the prompt box](docs/paste.png)
 
-Rest the pointer on a print for half a second: `⧉ image` puts the picture itself on the clipboard, `⎘ path` its path.
+Paste an image in the prompt box: its thumbnail shows just above it.
 
-### A viewer in the chat
-
-Click a print and it opens in a dark panel under the strip, as in the picture at the top. Click the right half of the picture for the next one, the left half for the one before, and beside it to close. The panel keeps one size, so the buttons stay under your pointer.
-
-### Your pasted images, before you send
-
-![A pasted image shown above the prompt box, its marker in amber](docs/paste.png)
-
-The images you paste show right above the prompt box, and their `[Image #N]` markers turn amber. Once sent, your message gets its grey line too.
-
-## Clicks and keys
+## Mouse and keys
 
 | | |
 |---|---|
-| Click the grey line | unroll or fold the strip |
-| Click a print | open it in the viewer |
+| Click the line | show or hide the thumbnails |
+| Click a thumbnail | see it big |
 | Click the right or left half of the picture | the next or the previous one |
-| Click beside the picture | close the viewer |
-| <kbd>←</kbd> <kbd>→</kbd> (or <kbd>h</kbd> <kbd>l</kbd>) | browse, once a click gave the strip or the viewer the focus |
-| <kbd>i</kbd> · <kbd>c</kbd> · <kbd>o</kbd> · <kbd>x</kbd> | copy the image · copy its path · open it · close |
-| `/darkroom` | the whole roll of the session |
+| Click beside the picture | close it |
+| <kbd>←</kbd> <kbd>→</kbd> (or <kbd>h</kbd> <kbd>l</kbd>) | the next or the previous one, after a click |
+| <kbd>i</kbd> · <kbd>c</kbd> · <kbd>o</kbd> · <kbd>x</kbd> | copy the image · copy its path · open it in your image viewer · close |
+| `/darkroom` | every image of the session |
+
+Clicks and hover need Claude Code's fullscreen mode, which passes the mouse on to darkroom.
 
 ## Settings
 
 ```
 /darkroom settings                      # what is set now
-/darkroom set auto-show on              # unroll the strips without a click
-/darkroom set develop off               # skip the safelight develop
-/darkroom set opener feh --scale-down   # what opens an image; auto: open on macOS, xdg-open elsewhere
+/darkroom set auto-show on              # show the thumbnails without a click
+/darkroom set develop off               # no red-light effect
+/darkroom set opener feh --scale-down   # what opens an image (default: open on macOS, xdg-open on Linux)
 ```
 
-A setting takes effect at once and is kept for the next sessions, in the plugin's own store.
+A setting applies at once and is kept for the next sessions.
 
-## Requirements
+<details>
+<summary><b>Requirements</b></summary>
 
 | | |
 |---|---|
-| Claude Code | 2.1.287 or newer. Clicks and hover need a session that reports the mouse (fullscreen mode). |
+| Claude Code | 2.1.287 or newer, in fullscreen mode for clicks and hover |
 | ImageMagick | only for JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF: 7 (`magick`), or 6 (`convert`, `identify`) |
-| Terminal | the kitty graphics protocol for real pictures: Ghostty or kitty, on Linux (Wayland or X11) or macOS |
+| Terminal | Ghostty or kitty for real pictures, on Linux (Wayland or X11) or macOS |
 | Clipboard | to copy an image: `wl-copy` on Wayland, `xclip` on X11, `osascript` on macOS |
+
+</details>
 
 <details>
 <summary><b>How it works</b></summary>
@@ -119,7 +120,9 @@ A setting takes effect at once and is kept for the next sessions, in the plugin'
 
 ## Privacy and security
 
-darkroom sends nothing anywhere: it makes no network call, and it never puts text in a prompt, runs a tool or runs a command of its own accord.
+In short: darkroom works on your machine only. It makes no network call and collects nothing, and Claude never gets the pixels of an image through it. The privacy policy is in [PRIVACY.md](PRIVACY.md); below, every program darkroom runs, and why.
+
+darkroom never puts text in a prompt, runs a tool or runs a command of its own accord.
 
 **Programs it runs, and why.** Each by name with its arguments, the image path always one argument of its own:
 
