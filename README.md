@@ -118,6 +118,30 @@ darkroom sends nothing anywhere: it makes no network call, and it never puts tex
 - To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file (or runs `xclip` on X11), the path passed as an argument, never part of the script.
 - Your opener, when you press open: `open` on macOS, `setsid -f xdg-open` on Linux so the viewer outlives the call, or the command you set.
 
+**The exact commands.** Every program darkroom can run, as it runs it: `<image>` is the absolute path of the image, `<png>` the image itself or its PNG copy, `<id>` a hash of the path and its date, `W`×`H` the size of the pixel grid. The path is always one argument of its own, never part of a script:
+
+```sh
+# once per session
+id -u
+magick -version                  # or, without ImageMagick 7: convert -version
+
+# a JPEG, GIF, WebP, AVIF, SVG, BMP or TIFF image, with MAGICK_CONFIGURE_PATH=<plugin>/magick
+# (JPEG: stands for the decoder the extension names; ImageMagick 6 runs convert and identify)
+magick identify -format '%w %h %m' 'JPEG:<image>[0]'
+magick 'JPEG:<image>[0]' -resize '2048x2048>' 'PNG:<tmp>/claude-<uid>/darkroom-<id>.png'
+magick 'JPEG:<image>[0]' -background '#141414' -flatten -resize 'WxH!' -depth 8 -compress none ppm:-
+
+# copy image, on macOS
+osascript -e 'on run argv' -e 'set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)' -e 'end run' '<png>'
+# copy image, on Linux
+sh -c '{ if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy; then wl-copy --type image/png <"$1"; elif command -v xclip; then xclip -selection clipboard -t image/png -i "$1"; else exit 3; fi; } >/dev/null 2>&1' darkroom '<png>'
+
+# open, on macOS; an opener you set runs in place of open
+open '<image>'
+# open, on Linux; an opener you set runs in place of xdg-open
+setsid -f xdg-open '<image>'
+```
+
 **Hooks it uses, and what they do.**
 
 - `tool.call` reads each call's arguments, and the output of commands and MCP tools, for the image paths the call worked on. It never changes or answers a call.
