@@ -3,10 +3,10 @@
 </p>
 
 <p align="center">
-  <a href="#install"><img alt="Claude Code mod" src="https://img.shields.io/badge/Claude_Code-mod-d97757?style=flat-square"></a>
-  <a href="#the-kitty-graphics-protocol"><img alt="kitty graphics protocol: Ghostty, kitty" src="https://img.shields.io/badge/kitty_graphics_protocol-Ghostty_%C2%B7_kitty-f5a623?style=flat-square"></a>
-  <img alt="Linux and macOS" src="https://img.shields.io/badge/Linux_%C2%B7_macOS-2b2b2b?style=flat-square">
-  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-444?style=flat-square">
+  <a href="#install"><img alt="Claude Code mod" src="docs/badges/claude-code.png" height="23"></a>
+  <a href="#the-kitty-graphics-protocol"><img alt="kitty graphics protocol: Ghostty, kitty" src="docs/badges/kitty.png" height="23"></a>
+  <img alt="Linux and macOS" src="docs/badges/platforms.png" height="23">
+  <img alt="MIT license" src="docs/badges/license.png" height="23">
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ sudo apt install imagemagick    # Debian, Ubuntu
 ### The kitty graphics protocol
 
 > [!IMPORTANT]
-> darkroom shows **real pictures** through the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): it tells the terminal which image file to draw and where, and the terminal draws its pixels right in the chat. Use a terminal that speaks it: **[Ghostty](https://ghostty.org)** or **[kitty](https://sw.kovidgoyal.net/kitty/)**, on Linux or macOS.
+> darkroom shows **real pictures** through the **kitty graphics protocol**: it tells the terminal which image file to draw and where, and the terminal draws its pixels right in the chat. Use a terminal that speaks it: **Ghostty** or **kitty**, on Linux or macOS.
 >
 > Any other terminal, tmux or an ssh session gets the pictures in half-block cells instead: coarser, but everything else works.
 
