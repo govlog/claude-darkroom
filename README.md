@@ -101,7 +101,7 @@ A setting takes effect at once and is kept for the next sessions, in the plugin'
 - A `tool.call` hook looks for image paths in each call's arguments and, for commands and MCP tools, in its output. A path counts only if the call read it, wrote it, or changed it: an `ls` that lists images does not put them on the roll.
 - A PNG is read and decoded by darkroom itself, inside the mod's sandbox: its size from its header, and the small pixel grid the develop and the half-block fallback paint from. The terminal draws the picture straight from the file.
 - Any other format goes to ImageMagick, under the policy darkroom ships: it reads the size, writes a PNG copy into Claude Code's own temporary folder and prints the pixel grid.
-- The rows are `ui.render` hooks on tool results, tool groups, your messages and the output of `/darkroom`. Each picture is an `Image` element: Claude Code passes it to the terminal with the kitty graphics protocol. A clear `Client` layer over the pictures takes the clicks, the hover and the keys, and never draws, so the pictures stay.
+- The rows are `ui.render` hooks on tool results, tool groups, your messages and the output of `/darkroom`. Each picture is an `Image` element: Claude Code passes it to the terminal with the kitty graphics protocol. A clear `Client` layer over the pictures and the viewer's toolbar takes the clicks, the hover and the keys, and never draws, so the pictures stay. A press over it never reaches the transcript: a quick click or one that slips never selects text.
 
 </details>
 

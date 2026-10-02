@@ -5,7 +5,7 @@ import type { DarkroomSettings, Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
 import type { Cells, Grid } from './develop'
 import { MENU_IMAGE, MENU_PATH } from './hit'
-import type { Hit, Item } from './hit'
+import type { Hit, Item, Tool } from './hit'
 import { decodePng, pngHeader } from './png'
 
 // The roll. ponytail: each print keeps a small pixel grid in session state;
@@ -38,13 +38,15 @@ const AMBER = '#f5a623'
 const PANEL = '#161616'
 const LIT = '#2b2b2b'
 const INK = '#141414'
-// A button under the pointer: amber, as a lit menu entry.
-const LIT_BUTTON = { backgroundColor: AMBER, color: INK }
 const HINT = 'click a half to browse · beside to close'
 
-const BACK = ['left', 'h', 'up', 'k']
-const FORTH = ['right', 'l', 'down', 'j', 'tab', ' ']
-const SHUT = ['x', 'q', 'backspace']
+// The keys a hit layer passes on once a click gave it the focus, by the toolbar entry each stands for.
+const KEYS: Record<string, Tool> = {
+  ...{ left: 'back', h: 'back', up: 'back', k: 'back' },
+  ...{ right: 'forth', l: 'forth', down: 'forth', j: 'forth', tab: 'forth', ' ': 'forth' },
+  ...{ x: 'shut', q: 'shut', backspace: 'shut' },
+  ...{ i: 'image', c: 'path', o: 'open' },
+}
 
 const PLACEHOLDER = /\[Image #(\d+)\]/g
 const ROLL_LINE = /^(?:darkroom: )*\d+ prints? on the roll\.$/
@@ -98,6 +100,7 @@ const isUnrolled = atom({ plugin: 'darkroom', key: 'isUnrolled' } as const, null
 const viewing = atom({ plugin: 'darkroom', key: 'viewing' } as const, -1)
 const isDeveloped = atom({ plugin: 'darkroom', key: 'isDeveloped' } as const, false)
 const hovered = atom({ plugin: 'darkroom', key: 'hovered' } as const, { at: -1, item: '' })
+const lit = atom({ plugin: 'darkroom', key: 'lit' } as const, '')
 const pasted = atom({ plugin: 'darkroom', key: 'pasted' } as const, [])
 const NO_HOVER = { at: -1, item: '' as Item }
 
@@ -107,16 +110,16 @@ type Job = { verb: Verb; tool: string; since: number; useId?: string; tries: num
   | { paste: number }
 )
 type ImageMagick = { convert: string[]; identify: string[] }
-/** What a hit layer posts: a pick, a copy from the hover menu, a hover, a step, a key. */
+/** What a hit layer posts: a pick, a copy from the hover menu, a hover, a fold, a toolbar entry, a lit one, a key. */
 type Post = {
   ids: string[]
   pick?: number
   copy?: 'image' | 'path'
   hover?: number
   item?: Item
-  step?: number
-  shut?: boolean
   fold?: boolean
+  tool?: Tool
+  lit?: Tool | ''
   key?: string
 }
 // The drawing helpers' elements; the render hook draws the hit layers itself.
@@ -127,6 +130,7 @@ type RowView = {
   strip: Print[]
   at: number
   hovered: { at: number; item: string }
+  lit: string
   width: number
   screenRows: number
   hasDeveloped: boolean
@@ -176,27 +180,58 @@ const stripLayout = (row: RowView) => {
   return { first, visible, hit }
 }
 
+type ToolEntry = { tool?: Tool; text: string; left: number }
+
+// The viewer's toolbar, a cell in from each side of the panel: ◀ n/N ▶ on the
+// left, the acts on the right a cell apart. Each entry starts at a fixed cell,
+// where it is drawn and where the hit layer takes its clicks.
+const toolbar = (panel: number, at: number, count: number) => {
+  const counter = ` ${String(at + 1).padStart(String(count).length)}/${count} `
+  const lead: Omit<ToolEntry, 'left'>[] = [{ tool: 'back', text: ' ◀ ' }, { text: counter }, { tool: 'forth', text: ' ▶ ' }]
+  const acts: Omit<ToolEntry, 'left'>[] = [
+    { tool: 'image', text: MENU_IMAGE },
+    { tool: 'path', text: MENU_PATH },
+    { tool: 'open', text: ' ↗ open ' },
+    { tool: 'shut', text: ' ✕ ' },
+  ]
+  const entries: ToolEntry[] = []
+  let x = 1
+  for (const one of lead) {
+    entries.push({ ...one, left: x })
+    x += one.text.length
+  }
+  x = Math.max(x + 1, panel - 1 - acts.reduce((sum, one) => sum + one.text.length + 1, -1))
+  for (const one of acts) {
+    entries.push({ ...one, left: x })
+    x += one.text.length + 1
+  }
+  return entries
+}
+
 // Where the viewer puts the picture on show: in a dark panel of one size per
 // row, sized by the screen and the row's widest picture, never by the one on
-// show, so browsing moves nothing under the pointer.
+// show, so browsing moves nothing under the pointer. Its hit layer covers the
+// toolbar and the frame under it.
 const viewerLayout = (row: RowView, current: Print) => {
   const frameRows = Math.max(8, Math.min(26, Math.round(row.screenRows * 0.45)))
   const viewBox = (print: Print) =>
     fit(print.width, print.height, Math.min(row.width - 4, viewColumns(print.width)), frameRows)
   const panel = Math.min(row.width, Math.max(PANEL_MIN, ...row.strip.map(one => viewBox(one).columns + 4)))
   const box = viewBox(current)
+  const tools = toolbar(panel, row.at, row.strip.length)
   const hit: Hit = {
     role: 'view',
     ids: row.strip.map(one => one.id),
     at: row.at,
     picture: {
       left: Math.floor((panel - box.columns) / 2),
-      top: Math.floor((frameRows - box.rows) / 2),
+      top: 1 + Math.floor((frameRows - box.rows) / 2),
       columns: box.columns,
       rows: box.rows,
     },
+    tools: tools.flatMap(one => (one.tool === undefined ? [] : [{ tool: one.tool, left: one.left, width: one.text.length }])),
   }
-  return { frameRows, panel, box, hit }
+  return { frameRows, panel, box, tools, hit }
 }
 
 export const register: Register = on => {
@@ -249,18 +284,11 @@ export const register: Register = on => {
       <els.Raster key={key} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 1)} />
     )
 
-  // A hover menu's entry: amber while the pointer is on it.
-  const menuEntry = (els: Elements, text: string, isLit: boolean) => (
-    <els.Text backgroundColor={isLit ? AMBER : LIT} color={isLit ? INK : undefined}>
+  // A hover menu's or the toolbar's entry: amber while the pointer is on it.
+  const menuEntry = (els: Elements, text: string, isLit: boolean, rest = LIT) => (
+    <els.Text backgroundColor={isLit ? AMBER : rest} color={isLit ? INK : undefined}>
       {text}
     </els.Text>
-  )
-
-  // A toolbar button, in a keyed Box so it lights up alone under the pointer.
-  const toolButton = (els: Elements, key: string, label: string, onPress: (press: { surface: RenderSurface }) => unknown) => (
-    <els.Box key={`tool-${key}`}>
-      <els.Button key={key} label={label} plain hover={LIT_BUTTON} onPress={onPress} />
-    </els.Box>
   )
 
   // The thumbnails side by side; the render hook lays the hit layer over them.
@@ -303,34 +331,21 @@ export const register: Register = on => {
   }
 
   // The picture on show with its toolbar and its caption: the content of the
-  // dark panel the render hook places, its hit layer over the picture.
-  const drawViewer = (
-    els: Elements,
-    row: RowView,
-    current: Print,
-    layout: ReturnType<typeof viewerLayout>,
-    acts: { step: (by: number) => unknown; shut: () => unknown },
-  ) => {
+  // dark panel the render hook places, its hit layer over the toolbar and the picture.
+  const drawViewer = (els: Elements, row: RowView, current: Print, layout: ReturnType<typeof viewerLayout>) => {
     const { Box, Text } = els
-    const { frameRows, panel, box } = layout
-    const count = row.strip.length
+    const { frameRows, panel, box, tools } = layout
     const title = where(current)
     const meta = `${current.width}×${current.height} · ${current.format} · ${humanSize(current.bytes)}`
     const hasHint = title.length + meta.length + HINT.length + 5 <= panel
     return (
       <Box flexDirection="column" width={panel}>
-        <Box width={panel} justifyContent="space-between" paddingX={1}>
-          <Box>
-            {toolButton(els, 'prev', ' ◀ ', () => acts.step(-1))}
-            <Text>{` ${String(row.at + 1).padStart(String(count).length)}/${count} `}</Text>
-            {toolButton(els, 'next', ' ▶ ', () => acts.step(1))}
-          </Box>
-          <Box gap={1}>
-            {toolButton(els, 'copy-image', ' ⧉ image ', () => act.copyImage(current))}
-            {toolButton(els, 'copy-path', ' ⎘ path ', press => act.copyPath(current, press.surface))}
-            {toolButton(els, 'open', ' ↗ open ', () => act.open(current))}
-            {toolButton(els, 'shut', ' ✕ ', acts.shut)}
-          </Box>
+        <Box key="toolbar" width={panel} height={1}>
+          {tools.map(one => (
+            <Box key={`tool-${one.tool ?? 'count'}`} position="absolute" left={one.left}>
+              {menuEntry(els, one.text, one.tool !== undefined && one.tool === row.lit, PANEL)}
+            </Box>
+          ))}
         </Box>
         <Box key="frame" width={panel} height={frameRows} justifyContent="center" alignItems="center">
           {picture(els, current, box, 'view')}
@@ -714,19 +729,26 @@ export const register: Register = on => {
     }
     const post = e.data as Post
     const view = memberOf(viewing, e)
-    const key = post.key ?? ''
     const pick = post.pick
     const hover = post.hover
+    const entry = post.lit
     const printAt = async (at: number) => (await read($, prints)).find(one => one.id === post.ids[at])
     if (hover !== undefined) {
       await update($, memberOf(hovered, e), () => ({ at: hover, item: post.item ?? '' }))
       return {}
     }
+    if (entry !== undefined) {
+      await update($, memberOf(lit, e), () => entry)
+      return {}
+    }
+    // A toolbar entry clicked, or the key that stands for it.
+    const tool = post.tool ?? KEYS[post.key ?? '']
+    const wasOpen = (await read($, view)) >= 0
     if (post.fold === true) {
       await update($, memberOf(isUnrolled, e), () => false)
       await update($, memberOf(hovered, e), () => NO_HOVER)
       await update($, view, () => -1)
-    } else if (post.shut === true || SHUT.includes(key)) {
+    } else if (tool === 'shut') {
       await update($, view, () => -1)
     } else if (post.copy !== undefined && pick !== undefined) {
       const print = await printAt(pick)
@@ -735,19 +757,23 @@ export const register: Register = on => {
       }
     } else if (pick !== undefined) {
       await update($, view, at => (at === pick ? -1 : pick))
-    } else if (post.step !== undefined || BACK.includes(key) || FORTH.includes(key)) {
-      const by = post.step ?? (BACK.includes(key) ? -1 : 1)
+    } else if (tool === 'back' || tool === 'forth') {
+      const by = tool === 'back' ? -1 : 1
       await update($, view, at => Math.max(0, Math.min(post.ids.length - 1, at + by)))
-    } else if (key === 'return') {
+    } else if (post.key === 'return') {
       await update($, view, at => (at < 0 ? 0 : -1))
-    } else if (key === 'i' || key === 'c' || key === 'o') {
+    } else if (tool !== undefined) {
       const print = await printAt(Math.max(0, await read($, view)))
       if (print !== undefined) {
-        await (key === 'i' ? act.copyImage(print) : key === 'c' ? act.copyPath(print, e.surface) : act.open(print))
+        await (tool === 'image' ? act.copyImage(print) : tool === 'path' ? act.copyPath(print, e.surface) : act.open(print))
       }
     }
     // One viewer at a time: the one just opened puts the others away.
     if ((await read($, view)) >= 0) {
+      if (!wasOpen) {
+        // It opens with no toolbar entry lit: the pointer was elsewhere.
+        await update($, memberOf(lit, e), () => '')
+      }
       for (const other of openViews) {
         if (other !== e.requestId) {
           await update($, memberOf(viewing, { requestId: other }), () => -1)
@@ -826,6 +852,7 @@ export const register: Register = on => {
       strip,
       at,
       hovered: isOpen ? await read($, memberOf(hovered, e)) : NO_HOVER,
+      lit: at >= 0 ? await read($, memberOf(lit, e)) : '',
       width: Math.max(THUMB.columns, (e.viewport?.columns ?? 80) - 4),
       screenRows: e.viewport?.rows ?? 40,
       hasDeveloped,
@@ -870,12 +897,9 @@ export const register: Register = on => {
             {current !== undefined && viewAt !== undefined && (
               <Box width={view.width - 2} justifyContent="center" marginTop={1}>
                 <Box flexDirection="column" width={viewAt.panel} backgroundColor={PANEL}>
-                  {drawViewer(els, view, current, viewAt, {
-                    step: by => setAt(now => Math.max(0, Math.min(strip.length - 1, now + by))),
-                    shut: () => setAt(() => -1),
-                  })}
-                  <Box position="absolute" top={1} left={0}>
-                    <els.Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows} props={viewAt.hit} />
+                  {drawViewer(els, view, current, viewAt)}
+                  <Box position="absolute" top={0} left={0}>
+                    <els.Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows + 1} props={viewAt.hit} />
                   </Box>
                 </Box>
               </Box>

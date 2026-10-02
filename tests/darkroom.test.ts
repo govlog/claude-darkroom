@@ -1,8 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
+import type { Engine, Mounted } from 'claude-code/testing'
 import type { On, PromptEditResult } from 'claude-code'
 
 import { imagePaths } from '../hooks/develop'
+import type { Tool, ToolSpot } from '../hooks/hit'
 import { BOMB, TALL, WIDE } from './fixtures'
 
 const NOW = 1_700_000_000_000
@@ -122,6 +123,28 @@ const unroll = async (ui: { press: (target: { key: string }) => Promise<unknown>
   await clock.advance(2000)
 }
 
+type Drawing = Mounted<'terminal', 'ToolResult'>
+
+// The toolbar entries of the open viewer, as the hit layer over them knows them.
+const toolbar = async (ui: Drawing) =>
+  ((await ui.find({ type: 'Client', key: 'view-hit' }))?.props.props as { tools: ToolSpot[] }).tools
+
+// Where one toolbar entry sits.
+const toolSpot = async (ui: Drawing, tool: Tool) => {
+  const spot = (await toolbar(ui)).find(one => one.tool === tool)
+  if (spot === undefined) {
+    throw new Error(`the toolbar has no ${tool} entry`)
+  }
+  return spot
+}
+
+// Clicks a toolbar entry of the open viewer.
+const click = async (ui: Drawing, tool: Tool) => {
+  const { left } = await toolSpot(ui, tool)
+  await ui.pointer({ type: 'down', x: left + 1, y: 0, button: 'left', in: 'view-hit' })
+  await ui.pointer({ type: 'up', x: left + 1, y: 0, button: 'left', in: 'view-hit' })
+}
+
 // Pastes image #1 into the prompt box and lets it develop.
 const paste = async ($: Engine, clock: ReturnType<typeof mock.clock>) => {
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
@@ -214,7 +237,7 @@ test('the path button puts the path on the clipboard', async ($, on) => {
   const ui = await $.ui.mount(result(w.calls[0]))
   await unroll(ui, w.clock)
   await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
-  await ui.press({ key: 'copy-path' })
+  await click(ui, 'path')
   expect(w.copies).toEqual(['/work/shot.png'])
   await ui.unmount()
 })
@@ -229,7 +252,7 @@ for (const [system, argv] of [
     const ui = await $.ui.mount(result(w.calls[0]))
     await unroll(ui, w.clock)
     await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
-    await ui.press({ key: 'open' })
+    await click(ui, 'open')
     expect(w.runs).toContainEqual([...argv, '/work/shot.png'])
     await ui.unmount()
   })
@@ -241,7 +264,7 @@ test('open hands the image to the opener the settings name', async ($, on) => {
   const ui = await $.ui.mount(result(w.calls[0]))
   await unroll(ui, w.clock)
   await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
-  await ui.press({ key: 'open' })
+  await click(ui, 'open')
   expect(w.runs).toContainEqual(['setsid', '-f', 'feh', '--scale-down', '/work/shot.png'])
   await ui.unmount()
 })
@@ -331,8 +354,10 @@ test('browsing keeps the frame, and so the buttons, in place', async ($, on) => 
   await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
   const frame = async () => (await ui.find({ type: 'Box', key: 'frame' }))?.props.height
   const wide = await frame()
-  await ui.press({ key: 'next' })
+  const tools = await toolbar(ui)
+  await click(ui, 'forth')
   expect(await frame(), 'the tall picture fits the same frame').toBe(wide)
+  expect(await toolbar(ui), 'the toolbar entries stay under the pointer').toEqual(tools)
   expect((await ui.find({ type: 'Image', key: 'view' }))?.props.source).toMatchObject({ file: '/work/tall.png' })
   await ui.unmount()
 })
@@ -349,8 +374,39 @@ test("a click on the picture's right half shows the next one, a click beside it 
   const spot = (layer?.props.props as { picture: Spot }).picture
   await ui.pointer({ type: 'up', x: spot.left + spot.columns - 1, y: spot.top, in: 'view-hit' })
   expect((await ui.find({ type: 'Image', key: 'view' }))?.props.source).toMatchObject({ file: '/work/b.png' })
-  await ui.pointer({ type: 'up', x: 0, y: 0, in: 'view-hit' })
+  await ui.pointer({ type: 'up', x: 0, y: spot.top, in: 'view-hit' })
   expect(await ui.find({ type: 'Image', key: 'view' }), 'beside the picture puts it away').toBeUndefined()
+  await ui.unmount()
+})
+
+test('every click on an arrow browses, a quick one or one that slips off it', async ($, on) => {
+  const w = world(on, { disk: { '/work/a.png': NOW, '/work/b.png': NOW, '/work/c.png': NOW } })
+  await session($, w.clock, ['magick x.jpg /work/a.png /work/b.png /work/c.png'])
+  const ui = await $.ui.mount(result(w.calls[0]))
+  await unroll(ui, w.clock)
+  await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
+  const forth = await toolSpot(ui, 'forth')
+  // Down on the arrow, up two rows lower and beside the picture.
+  await ui.pointer({ type: 'down', x: forth.left, y: 0, button: 'left', in: 'view-hit' })
+  await ui.pointer({ type: 'move', x: forth.left + 6, y: 2, button: 'left', in: 'view-hit' })
+  await ui.pointer({ type: 'up', x: forth.left + 6, y: 2, button: 'left', in: 'view-hit' })
+  await click(ui, 'forth')
+  expect((await ui.find({ type: 'Image', key: 'view' }))?.props.source).toMatchObject({ file: '/work/c.png' })
+  await ui.unmount()
+})
+
+test('the toolbar entry under the pointer lights up', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW } })
+  await session($, w.clock, ['magick in.jpg /work/shot.png'])
+  const ui = await $.ui.mount(result(w.calls[0]))
+  await unroll(ui, w.clock)
+  await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
+  const lit = async () => (await ui.findAll({ type: 'Text' })).find(one => one.props.backgroundColor === '#f5a623')?.text
+  const open = await toolSpot(ui, 'open')
+  await ui.pointer({ type: 'move', x: open.left + 2, y: 0, in: 'view-hit' })
+  expect(await lit()).toBe(' ↗ open ')
+  await ui.pointer({ type: 'leave', x: open.left + 2, y: 0, in: 'view-hit' })
+  expect(await lit(), 'leaving puts the light out').toBeUndefined()
   await ui.unmount()
 })
 
@@ -456,7 +512,7 @@ test('on macOS, copy image hands the PNG to osascript, with no shell', async ($,
   const ui = await $.ui.mount(result(w.calls[0]))
   await unroll(ui, w.clock)
   await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
-  await ui.press({ key: 'copy-image' })
+  await click(ui, 'image')
   const copy = w.runs.find(argv => argv[0] === 'osascript')
   expect(copy?.at(-1)).toBe('/work/shot.png')
   expect(w.runs.some(argv => argv[0] === 'sh')).toBe(false)

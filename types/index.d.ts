@@ -38,6 +38,8 @@ declare module 'claude-code' {
       isDeveloped: StateFamily<boolean>
       /** The strip index whose hover menu shows (-1 for none) and the entry the pointer is on, by the row's requestId. */
       hovered: StateFamily<{ at: number; item: string }>
+      /** The viewer's toolbar entry under the pointer, by the row's requestId; '' for none. */
+      lit: StateFamily<string>
       /** The images pasted in the prompt box, by their [Image #N] numbers. */
       pasted: number[]
     }
