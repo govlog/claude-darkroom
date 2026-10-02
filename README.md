@@ -113,6 +113,7 @@ darkroom sends nothing anywhere: it makes no network call, and it never puts tex
 
 - No program for a PNG: darkroom decodes it in its own sandbox, with no access to files, programs or the network beyond what Claude Code hands it.
 - ImageMagick (`magick`, or `convert` and `identify`), for the other formats only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and runs it under [`magick/policy.xml`](magick/policy.xml): those formats and nothing else, no delegate program, no network, no indirect file lists, bounded memory, size and time.
+- `magick -version`, or else `convert -version`, once per session: to see whether ImageMagick is installed, and which version.
 - `id -u`, once per session: to find Claude Code's own temporary folder, `<tmp>/claude-<uid>`, where it keeps your pasted images and where ImageMagick leaves its PNG copies. macOS is told from Linux by a file only macOS has, with no program.
 - To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file (or runs `xclip` on X11), the path passed as an argument, never part of the script.
 - Your opener, when you press open: `open` on macOS, `setsid -f xdg-open` on Linux so the viewer outlives the call, or the command you set.
