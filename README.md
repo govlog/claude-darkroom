@@ -14,7 +14,7 @@
   shows up <b>in the chat itself</b>: a grey line under the row, a film strip, a viewer one click away.
 </p>
 
-![A darkroom viewer open in a Claude Code session, under the film strip of six images](docs/viewer.png)
+![A Claude Code session: the film strip of the six images Claude just made, and the viewer open on one of them](docs/viewer.png)
 
 ## Install
 
@@ -43,9 +43,11 @@ sudo apt install imagemagick    # Debian, Ubuntu
 
 ### A line under every row that holds images
 
-![A grey line, darkroom: 6 images, under a command, and its film strip](docs/strip.png)
+![A Claude Code session: Claude runs a script that makes six images, and the grey line darkroom: 6 images shows under its row](docs/line.png)
 
 A screenshot Claude read, a chart a script rendered, an export an MCP tool saved: the row gets a grey line. Click it and the film strip unrolls. The first time, the prints develop under a red safelight.
+
+![The film strip of the six images, unrolled under the grey line](docs/strip.png)
 
 ### Copy without opening
 
