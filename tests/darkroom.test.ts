@@ -49,7 +49,9 @@ const world = (
       ? { deny: `ENOENT: ${e.path}` }
       : { value: { kind: 'file' as const, size: 4096, mtimeMs, isLink: false, realPath: e.path } }
   })
-  on('fs.exists', ($, e) => ({ value: e.path === PASTES || disk[e.path] !== undefined }))
+  on('fs.exists', ($, e) => ({
+    value: e.path === PASTES || disk[e.path] !== undefined || (system === 'Darwin' && e.path.startsWith('/System/Library/')),
+  }))
   on('fs.list', ($, e) => ({
     value: e.path === '/tmp/claude-1000' ? [{ name: '-work', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }] : [],
   }))
@@ -57,7 +59,6 @@ const world = (
   on('fs.read', ($, e) => ({
     value: { base64: e.path.includes('tall') ? TALL : e.path.includes('bomb') ? BOMB : WIDE },
   }))
-  on('fs.write', () => ({ value: undefined }))
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     envs.push({ ...e.init?.env })
@@ -66,15 +67,7 @@ const world = (
       return { value: { exitCode: 127, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const stdout =
-      line === 'uname -s'
-        ? `${system}\n`
-        : line === 'id -u'
-          ? '1000\n'
-          : line.includes('identify')
-            ? '640 320 JPEG'
-            : line.endsWith('ppm:-')
-              ? PIXMAP
-              : ''
+      line === 'id -u' ? '1000\n' : line.includes('identify') ? '640 320 JPEG' : line.endsWith('ppm:-') ? PIXMAP : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('tool.call', ($, e) => {
@@ -153,7 +146,7 @@ test('image paths are picked out of commands and outputs', () => {
     '~/a.png',
     '/tmp/b.PNG',
   ])
-  expect(imagePaths('see https://x.io/logo.png, notes.png.bak or --out=shot.svg')).toEqual(['shot.svg'])
+  expect(imagePaths('see file:///work/logo.png, notes.png.bak or --out=shot.svg')).toEqual(['shot.svg'])
 })
 
 test('a tool call that makes an image gets a grey line under its result', async ($, on) => {
@@ -454,5 +447,18 @@ test('+N turns the strip to its next page', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: '+1 ▶' })).toBeDefined()
   await ui.pointer({ type: 'up', x: 20, y: 1, in: 'strip-hit' })
   expect((await ui.find({ type: 'Image', key: 'view' }))?.props.source).toMatchObject({ file: '/work/b.png' })
+  await ui.unmount()
+})
+
+test('on macOS, copy image hands the PNG to osascript, with no shell', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW }, system: 'Darwin' })
+  await session($, w.clock, ['magick in.jpg /work/shot.png'])
+  const ui = await $.ui.mount(result(w.calls[0]))
+  await unroll(ui, w.clock)
+  await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
+  await ui.press({ key: 'copy-image' })
+  const copy = w.runs.find(argv => argv[0] === 'osascript')
+  expect(copy?.at(-1)).toBe('/work/shot.png')
+  expect(w.runs.some(argv => argv[0] === 'sh')).toBe(false)
   await ui.unmount()
 })

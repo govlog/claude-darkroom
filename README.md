@@ -100,7 +100,7 @@ A setting takes effect at once and is kept for the next sessions, in the plugin'
 
 - A `tool.call` hook looks for image paths in each call's arguments and, for commands and MCP tools, in its output. A path counts only if the call read it, wrote it, or changed it: an `ls` that lists images does not put them on the roll.
 - A PNG is read and decoded by darkroom itself, inside the mod's sandbox: its size from its header, and the small pixel grid the develop and the half-block fallback paint from. The terminal draws the picture straight from the file.
-- Any other format goes to ImageMagick, under the policy darkroom ships: it reads the size, converts the file to a cached PNG and prints the pixel grid.
+- Any other format goes to ImageMagick, under the policy darkroom ships: it reads the size, writes a PNG copy into Claude Code's own temporary folder and prints the pixel grid.
 - The rows are `ui.render` hooks on tool results, tool groups, your messages and the output of `/darkroom`. Each picture is an `Image` element: Claude Code passes it to the terminal with the kitty graphics protocol. A clear `Client` layer over the pictures takes the clicks, the hover and the keys, and never draws, so the pictures stay.
 
 </details>
@@ -113,8 +113,8 @@ darkroom sends nothing anywhere: it makes no network call, and it never puts tex
 
 - No program for a PNG: darkroom decodes it in its own sandbox, with no access to files, programs or the network beyond what Claude Code hands it.
 - ImageMagick (`magick`, or `convert` and `identify`), for the other formats only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and runs it under [`magick/policy.xml`](magick/policy.xml): those formats and nothing else, no delegate program, no network, no indirect file lists, bounded memory, size and time.
-- `uname -s` and `id -u`, once per session: to tell macOS from Linux, and to find the folder where Claude Code keeps your pasted images.
-- `sh -c` with one fixed script, to copy an image: `wl-copy` reads the picture on its standard input, so the script hands it the file. On macOS the script runs `osascript`, on X11 `xclip`.
+- `id -u`, once per session: to find Claude Code's own temporary folder, `<tmp>/claude-<uid>`, where it keeps your pasted images and where ImageMagick leaves its PNG copies. macOS is told from Linux by a file only macOS has, with no program.
+- To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file (or runs `xclip` on X11), the path passed as an argument, never part of the script.
 - Your opener, when you press open: `open` on macOS, `setsid -f xdg-open` on Linux so the viewer outlives the call, or the command you set.
 
 **Hooks it uses, and what they do.**
@@ -125,7 +125,7 @@ darkroom sends nothing anywhere: it makes no network call, and it never puts tex
 - `command.run` answers `/darkroom` and nothing else.
 - `ui.render` and `ui.message` draw the rows and take the clicks, hover and keys over them.
 
-**What it reads and writes.** It reads the images a tool call names, your pasted images, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`, `XDG_CACHE_HOME`. It writes PNG copies of non-PNG images to `~/.cache/claude-darkroom` (or `$XDG_CACHE_HOME/claude-darkroom`), a small pixel grid per image in the session's state, and your settings in its store.
+**What it reads and writes.** It reads the images a tool call names, your pasted images, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`. darkroom itself writes no file: it keeps a small pixel grid per image in the session's state and your settings in its store. Only ImageMagick writes, for a non-PNG image: its PNG copy, in Claude Code's own temporary folder, which only you can read.
 
 **The tests.** `tests/` stand in for Claude Code: they answer `process.run`, `tool.call`, the store and the rest, and call `tool.call`, `command.run` and `prompt.submit` the way Claude Code does, to check how the mod reacts. The mod itself makes none of those calls. `demo/make-images.sh` draws the screenshot images with ImageMagick.
 

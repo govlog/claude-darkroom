@@ -65,14 +65,18 @@ const CODERS: Record<string, string> = {
 // Tool arguments that hold file contents, not paths the call worked on.
 const SKIP = new Set(['tool', 'tool_use_id', 'agentId', 'content', 'old_string', 'new_string'])
 
-// Puts a PNG on the system clipboard. wl-copy reads the picture on its
-// standard input, hence the fixed script; the path is its argument, never part
-// of the script. The tools fork to serve the clipboard, so their output goes
-// to /dev/null and no pipe of ours stays open.
-const CLIPBOARD_SCRIPT = [
-  '{ if [ "$(uname -s)" = Darwin ]; then osascript -e "on run argv"',
-  '-e "set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)" -e "end run" "$1";',
-  'elif [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy; then wl-copy --type image/png <"$1";',
+// Puts a PNG on the clipboard. macOS: osascript, run directly. Linux: wl-copy
+// reads the picture on its standard input, hence this fixed script, the path
+// its argument and never part of it; wl-copy and xclip fork to serve the
+// clipboard, so their output goes to /dev/null and no pipe of ours stays open.
+const MAC_CLIPBOARD = [
+  'osascript',
+  ...['-e', 'on run argv'],
+  ...['-e', 'set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)'],
+  ...['-e', 'end run'],
+]
+const LINUX_CLIPBOARD = [
+  '{ if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy; then wl-copy --type image/png <"$1";',
   'elif command -v xclip; then xclip -selection clipboard -t image/png -i "$1";',
   'else exit 3; fi; } >/dev/null 2>&1',
 ].join(' ')
@@ -364,12 +368,15 @@ export const register: Register = on => {
     // tmux, not from the far end of ssh. There the rows paint half-block cells.
     isKitty =
       isKittyTerm && (await $.env.get('TMUX')) === undefined && (await $.env.get('SSH_CONNECTION')) === undefined
-    isMac = (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Darwin'
+    // macOS, told by a file only macOS has: no program to run for it.
+    isMac = await $.fs.exists('/System/Library/CoreServices/SystemVersion.plist').catch(() => false)
     home = (await $.env.get('HOME')) ?? ''
     cwd = e.cwd
     const tmp = ((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/+$/, '') || '/tmp'
     const uid = (await $.process.run(['id', '-u']).catch(() => undefined))?.stdout.trim() ?? ''
-    const cache = `${(await $.env.get('XDG_CACHE_HOME')) ?? `${home === '' ? '/tmp' : home}/.cache`}/claude-darkroom`
+    // Claude Code's own temporary folder, readable by this user alone: where
+    // ImageMagick leaves the PNG copy of another format.
+    const scratch = `${tmp}/claude-${uid}`
     // The ImageMagick policy this plugin ships, in magick/policy.xml.
     const policy = `${$.plugin.root}/magick`
     const hasMagick7 = (await $.process.run(['magick', '-version']).catch(() => undefined))?.exitCode === 0
@@ -381,7 +388,6 @@ export const register: Register = on => {
         ? { convert: ['convert'], identify: ['identify'] }
         : undefined
     let hasWarned = false
-    let hasCache = false
     let isBusy = false
     let pasteFolder = { session: '', path: '' }
 
@@ -481,12 +487,7 @@ export const register: Register = on => {
       }
       let png = real
       if (format !== 'PNG') {
-        // ponytail: converted PNGs stay in the cache; prune it by age if it grows.
-        png = `${cache}/${id}.png`
-        if (!hasCache) {
-          await $.fs.write(`${cache}/.keep`, '')
-          hasCache = true
-        }
+        png = `${scratch}/darkroom-${id}.png`
         const made = await run([...magick.convert, source, '-resize', '2048x2048>', `PNG:${png}`])
         if (made.exitCode !== 0) {
           return undefined
@@ -570,7 +571,8 @@ export const register: Register = on => {
 
     act = {
       copyImage: async print => {
-        const copied = await $.process.run(['sh', '-c', CLIPBOARD_SCRIPT, 'darkroom', print.png]).catch(() => undefined)
+        const argv = isMac ? [...MAC_CLIPBOARD, print.png] : ['sh', '-c', LINUX_CLIPBOARD, 'darkroom', print.png]
+        const copied = await $.process.run(argv).catch(() => undefined)
         $.ui.toast(
           copied?.exitCode === 0
             ? `◐ image copied: ${label(print)}`
