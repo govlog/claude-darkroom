@@ -875,7 +875,7 @@ export const register: Register = on => {
         {isRoll ? (
           <els.Text dimColor>{`● darkroom: ${summary} on the roll`}</els.Text>
         ) : (
-          <Box key="toggle-line">
+          <Box key="toggle-line" marginTop={1}>
             <Button
               key="toggle"
               label={`● darkroom: ${summary} — click to ${isOpen ? 'hide' : 'show'}`}
@@ -887,7 +887,7 @@ export const register: Register = on => {
           </Box>
         )}
         {isOpen && (
-          <Box flexDirection="column" marginLeft={2}>
+          <Box flexDirection="column" marginLeft={2} marginTop={1}>
             <Box>
               {drawStrip(els, view, stripAt)}
               <Box position="absolute" top={0} left={0}>
