@@ -3,11 +3,8 @@
   "version": "0.1.0",
   "description": "The images Claude reads, writes or makes, and the ones you paste, as a film strip right in the chat: a grey line to unroll, a viewer to browse, a develop under a red safelight (kitty graphics: Ghostty, kitty).",
   "author": {
-    "name": "govlog",
-    "url": "https://github.com/govlog"
+    "name": "govlog"
   },
-  "homepage": "https://github.com/govlog/claude-darkroom",
-  "repository": "https://github.com/govlog/claude-darkroom",
   "license": "MIT",
   "keywords": [
     "mod",
