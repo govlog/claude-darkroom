@@ -5,6 +5,12 @@
   "author": {
     "name": "govlog"
   },
+  "homepage": "https://github.com/govlog/claude-darkroom",
+  "repository": "https://github.com/govlog/claude-darkroom",
+  "documentationUrl": "https://github.com/govlog/claude-darkroom#readme",
+  "supportUrl": "https://github.com/govlog/claude-darkroom/issues",
+  "privacyPolicyUrl": "https://github.com/govlog/claude-darkroom/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/govlog/claude-darkroom/blob/main/LICENSE",
   "license": "MIT",
   "keywords": [
     "mod",
