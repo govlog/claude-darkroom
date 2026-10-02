@@ -52,4 +52,4 @@ magick -size 900x900 -seed 42 plasma:fractal -blur 0x2 -modulate 100,150 texture
 
 magick -size 64x64 xc:none -fill '#f5a623' -draw 'circle 32,32 32,4' -fill '#141414' -draw 'circle 32,32 32,18' icon.png
 
-ls -1d "$PWD"/*
+realpath ./*

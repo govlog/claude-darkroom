@@ -8,21 +8,32 @@ const NOW = 1_700_000_000_000
 const CWD = '/work'
 const PASTES = '/tmp/claude-1000/-work/sess/images'
 const PIXMAP = 'P3\n2 1\n255\n255 0 0  0 0 255\n' // two pixels: red, blue
-const DETACHED = '"$@" >/dev/null 2>&1 &'
 const VIEWPORT = { columns: 120, rows: 50, isFullscreen: true }
 
-type World = { disk: Record<string, number>; term?: string; said?: string; system?: string }
+type World = {
+  disk: Record<string, number>
+  term?: string
+  said?: string
+  system?: string
+  store?: Record<string, unknown>
+}
 
 // What lies beneath the plugin: a disk (path → mtime), ImageMagick, a
-// clipboard, a terminal, the engine's own rows, and tools that answer `said`.
-const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linux' }: World) => {
+// clipboard, a terminal, the plugin's store, the engine's own rows, and tools
+// that answer `said`.
+const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linux', store = {} }: World) => {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { HOME: '/home/t', TERM: term, WAYLAND_DISPLAY: 'wayland-0' })
+  const saved: Record<string, unknown> = { ...store }
+  on('store.get', ($, e) => ({ value: saved[e.key] }))
+  on('store.set', ($, e) => {
+    saved[e.key] = e.value
+    return { value: undefined }
+  })
   const calls: string[] = []
   const runs: string[][] = []
   const toasts: string[] = []
   const copies: string[] = []
-  const writes: { key: string; value: unknown }[] = []
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'sess' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -74,14 +85,7 @@ const world = (on: On, { disk, term = 'xterm-ghostty', said = '', system = 'Linu
     copies.push(e.text)
     return { value: { isCopied: true as const } }
   })
-  on('config.list', () => ({
-    value: ['opener', 'develop'].map(field => ({ key: `darkroom.${field}` })) as never,
-  }))
-  on('config.set', ($, e) => {
-    writes.push({ key: e.key, value: e.value })
-    return { value: e.value }
-  })
-  return { clock, calls, runs, toasts, copies, writes }
+  return { clock, calls, runs, toasts, copies, saved }
 }
 
 // Starts the session, has the model run `commands`, and lets every develop finish.
@@ -202,34 +206,34 @@ test('the path button puts the path on the clipboard', async ($, on) => {
   await ui.unmount()
 })
 
-for (const [system, opener] of [
-  ['Linux', 'xdg-open'],
-  ['Darwin', 'open'],
+for (const [system, argv] of [
+  ['Linux', ['setsid', '-f', 'xdg-open']],
+  ['Darwin', ['open']],
 ] as const) {
-  test(`open hands the image to ${opener} on ${system} when no opener is set`, async ($, on) => {
+  test(`open hands the image to ${argv.join(' ')} on ${system} when no opener is set`, async ($, on) => {
     const w = world(on, { disk: { '/work/shot.png': NOW }, system })
     await session($, w.clock, ['magick in.jpg /work/shot.png'])
     const ui = await $.ui.mount(result(w.calls[0]))
     await unroll(ui, w.clock)
     await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
     await ui.press({ key: 'open' })
-    expect(w.runs).toContainEqual(['sh', '-c', DETACHED, 'darkroom', opener, '/work/shot.png'])
+    expect(w.runs).toContainEqual([...argv, '/work/shot.png'])
     await ui.unmount()
   })
 }
 
-test('open hands the image to the opener the settings name', { options: { opener: 'feh --scale-down' } }, async ($, on) => {
-  const w = world(on, { disk: { '/work/shot.png': NOW } })
+test('open hands the image to the opener the settings name', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW }, store: { settings: { opener: 'feh --scale-down' } } })
   await session($, w.clock, ['magick in.jpg /work/shot.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
   await unroll(ui, w.clock)
   await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
   await ui.press({ key: 'open' })
-  expect(w.runs).toContainEqual(['sh', '-c', DETACHED, 'darkroom', 'feh', '--scale-down', '/work/shot.png'])
+  expect(w.runs).toContainEqual(['setsid', '-f', 'feh', '--scale-down', '/work/shot.png'])
   await ui.unmount()
 })
 
-test('/darkroom set writes the setting it names', async ($, on) => {
+test('/darkroom set keeps the setting it names for the next sessions', async ($, on) => {
   const w = world(on, { disk: {} })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   const ran = await $.command.run({
@@ -238,8 +242,8 @@ test('/darkroom set writes the setting it names', async ($, on) => {
     origin: { kind: 'composer' },
     presentation: { isFullscreen: true, columns: 200 },
   })
-  expect(w.writes).toEqual([{ key: 'darkroom.develop', value: false }])
   expect(JSON.stringify(ran)).toContain('develop is now off')
+  expect(w.saved.settings).toMatchObject({ develop: false })
 })
 
 test('a terminal without kitty graphics gets the pictures in half-block cells', async ($, on) => {
@@ -296,8 +300,8 @@ test('/darkroom draws the whole roll in the chat', async ($, on) => {
   await ui.unmount()
 })
 
-test('with auto-show on, the strip shows without a click', { options: { autoShow: true } }, async ($, on) => {
-  const w = world(on, { disk: { '/work/shot.png': NOW } })
+test('with auto-show on, the strip shows without a click', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW }, store: { settings: { autoShow: true } } })
   await session($, w.clock, ['magick in.jpg /work/shot.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
   await w.clock.advance(2000)

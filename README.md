@@ -84,7 +84,7 @@ The images you paste show right above the prompt box, and their `[Image #N]` mar
 /darkroom set opener feh --scale-down   # what opens an image; auto: open on macOS, xdg-open elsewhere
 ```
 
-They are rows in `/config` too.
+A setting takes effect at once and is kept for the next sessions, in the plugin's own store.
 
 ## Requirements
 
@@ -104,16 +104,28 @@ They are rows in `/config` too.
 
 </details>
 
-<details>
-<summary><b>What it runs and touches</b></summary>
+## Privacy and security
 
-Everything stays on your machine; darkroom sends nothing anywhere.
+darkroom sends nothing anywhere: it makes no network call, and it never puts text in a prompt, runs a tool or runs a command of its own accord.
 
-- **Runs**, by argument vector: ImageMagick (`magick`, or `convert` and `identify`) on the images it finds; `uname -s` and `id -u` once per session; `sh -c` with a fixed script for the clipboard (`osascript`, `wl-copy` or `xclip`) and to start your opener (`open`, `xdg-open` or the one you set) detached, the image path always passed as an argument.
-- **Reads** the images a tool call names, the images you paste from the engine's folder for them, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`, `XDG_CACHE_HOME`.
-- **Writes** PNG copies of non-PNG images to `~/.cache/claude-darkroom` (or `$XDG_CACHE_HOME/claude-darkroom`), and a small pixel grid per image in the session's state.
+**Programs it runs, and why.** Each by name with its arguments, the image path always one argument of its own:
 
-</details>
+- ImageMagick (`magick`, or `convert` and `identify`): to read an image's size, to convert a non-PNG image to PNG for the terminal, and to make the small pixel grid the develop paints.
+- `uname -s` and `id -u`, once per session: to tell macOS from Linux, and to find the folder where Claude Code keeps your pasted images.
+- `sh -c` with one fixed script, to copy an image: `wl-copy` reads the picture on its standard input, so the script hands it the file. On macOS the script runs `osascript`, on X11 `xclip`.
+- Your opener, when you press open: `open` on macOS, `setsid -f xdg-open` on Linux so the viewer outlives the call, or the command you set.
+
+**Hooks it uses, and what they do.**
+
+- `tool.call` reads each call's arguments, and the output of commands and MCP tools, for the image paths the call worked on. It never changes or answers a call.
+- `prompt.edit` reads your draft for `[Image #N]` markers only, to paint them amber and show their pictures.
+- `prompt.submit` clears the pasted thumbnails and closes the open viewers. Your prompt passes on unchanged.
+- `command.run` answers `/darkroom` and nothing else.
+- `ui.render` and `ui.message` draw the rows and take the clicks, hover and keys over them.
+
+**What it reads and writes.** It reads the images a tool call names, your pasted images, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`, `XDG_CACHE_HOME`. It writes PNG copies of non-PNG images to `~/.cache/claude-darkroom` (or `$XDG_CACHE_HOME/claude-darkroom`), a small pixel grid per image in the session's state, and your settings in its store.
+
+**The tests.** `tests/` stand in for Claude Code: they answer `process.run`, `tool.call`, the store and the rest, and call `tool.call`, `command.run` and `prompt.submit` the way Claude Code does, to check how the mod reacts. The mod itself makes none of those calls. `demo/make-images.sh` draws the screenshot images with ImageMagick; the SVG namespace in it is a name, nothing is fetched.
 
 <details>
 <summary><b>Limits</b></summary>

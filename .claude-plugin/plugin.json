@@ -17,25 +17,5 @@
     "kitty-graphics",
     "ghostty"
   ],
-  "types": "./types/index.d.ts",
-  "userConfig": {
-    "opener": {
-      "type": "string",
-      "title": "darkroom: open images with",
-      "description": "Command that opens an image; the path is added last. auto: open on macOS, xdg-open elsewhere.",
-      "default": "auto"
-    },
-    "develop": {
-      "type": "boolean",
-      "title": "darkroom: develop animation",
-      "description": "Play the safelight develop the first time a strip unrolls.",
-      "default": true
-    },
-    "autoShow": {
-      "type": "boolean",
-      "title": "darkroom: show the strip without a click",
-      "description": "Unroll the film strip under each row that holds images, without a click.",
-      "default": false
-    }
-  }
+  "types": "./types/index.d.ts"
 }

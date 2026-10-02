@@ -20,10 +20,14 @@ export type Print = {
   gridHeight: number
 }
 
+/** What `/darkroom set` changes; kept across sessions in the plugin's store. */
+export type DarkroomSettings = { opener: string; develop: boolean; autoShow: boolean }
+
 declare module 'claude-code' {
   interface PluginState {
     darkroom: {
       prints: Print[]
+      settings: DarkroomSettings
       /** The prints a tool call worked on, by its tool_use_id. */
       shots: StateFamily<string[]>
       /** Whether a transcript row shows its strip, by the row's requestId; null follows auto-show. */

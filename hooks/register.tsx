@@ -1,7 +1,7 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { ElementTable, Register, RenderSurface } from 'claude-code'
+import type { ElementTable, Register, RenderElement, RenderSurface } from 'claude-code'
 
-import type { Print, Verb } from '../types'
+import type { DarkroomSettings, Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
 import type { Cells, Grid } from './develop'
 import { MENU_IMAGE, MENU_PATH } from './hit'
@@ -48,9 +48,10 @@ const ROLL_LINE = /^(?:darkroom: )*\d+ prints? on the roll\.$/
 // Tool arguments that hold file contents, not paths the call worked on.
 const SKIP = new Set(['tool', 'tool_use_id', 'agentId', 'content', 'old_string', 'new_string'])
 
-// Puts a PNG on the system clipboard. The tools fork to serve the clipboard,
-// so their output goes to /dev/null and no pipe of ours stays open. The path
-// is an argument, never part of the script.
+// Puts a PNG on the system clipboard. wl-copy reads the picture on its
+// standard input, hence the fixed script; the path is its argument, never part
+// of the script. The tools fork to serve the clipboard, so their output goes
+// to /dev/null and no pipe of ours stays open.
 const CLIPBOARD_SCRIPT = [
   '{ if [ "$(uname -s)" = Darwin ]; then osascript -e "on run argv"',
   '-e "set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)" -e "end run" "$1";',
@@ -58,26 +59,26 @@ const CLIPBOARD_SCRIPT = [
   'elif command -v xclip; then xclip -selection clipboard -t image/png -i "$1";',
   'else exit 3; fi; } >/dev/null 2>&1',
 ].join(' ')
-// Runs argv detached, so a viewer outlives the call and holds no pipe of ours.
-const DETACHED = '"$@" >/dev/null 2>&1 &'
 
-// The plugin's userConfig fields, as `/darkroom set <name> <value>` names them.
-const SETTINGS: Record<string, { field: string; kind: 'text' | 'boolean'; help: string }> = {
-  opener: { field: 'opener', kind: 'text', help: 'command that opens an image; auto: open on macOS, xdg-open elsewhere' },
-  develop: { field: 'develop', kind: 'boolean', help: 'play the safelight develop the first time a strip unrolls' },
-  'auto-show': { field: 'autoShow', kind: 'boolean', help: 'unroll the strip under a row without a click' },
+// The settings `/darkroom set <name> <value>` changes, kept across sessions.
+const DEFAULTS: DarkroomSettings = { opener: 'auto', develop: true, autoShow: false }
+const SETTINGS: Record<string, { field: keyof DarkroomSettings; help: string }> = {
+  opener: { field: 'opener', help: 'what opens an image, the path added last; auto: open on macOS, xdg-open elsewhere' },
+  develop: { field: 'develop', help: 'play the safelight develop the first time a strip unrolls' },
+  'auto-show': { field: 'autoShow', help: 'unroll the strip under a row without a click' },
 }
 const SWITCH: Record<string, boolean> = { on: true, off: false, true: true, false: false, yes: true, no: false }
 const USAGE = 'usage: /darkroom, /darkroom settings, /darkroom set <opener|develop|auto-show> <value>'
 
 const prints = atom({ plugin: 'darkroom', key: 'prints' } as const, [])
+const settings = atom({ plugin: 'darkroom', key: 'settings' } as const, DEFAULTS)
 const shots = atom({ plugin: 'darkroom', key: 'shots' } as const, [])
 const isUnrolled = atom({ plugin: 'darkroom', key: 'isUnrolled' } as const, null)
 const viewing = atom({ plugin: 'darkroom', key: 'viewing' } as const, -1)
 const isDeveloped = atom({ plugin: 'darkroom', key: 'isDeveloped' } as const, false)
 const hovered = atom({ plugin: 'darkroom', key: 'hovered' } as const, { at: -1, item: '' })
-const NO_HOVER = { at: -1, item: '' as Item }
 const pasted = atom({ plugin: 'darkroom', key: 'pasted' } as const, [])
+const NO_HOVER = { at: -1, item: '' as Item }
 
 /** An image to develop: a path a tool call named, or a pasted image by its number. */
 type Job = { verb: Verb; tool: string; since: number; useId?: string; tries: number } & (
@@ -85,7 +86,7 @@ type Job = { verb: Verb; tool: string; since: number; useId?: string; tries: num
   | { paste: number }
 )
 type ImageMagick = { convert: string[]; identify: string[] }
-/** What a hit layer posts: a pick, a copy from the hover menu, a step, a key. */
+/** What a hit layer posts: a pick, a copy from the hover menu, a hover, a step, a key. */
 type Post = {
   ids: string[]
   pick?: number
@@ -122,24 +123,66 @@ const pastedAs = (print: Print, session: string, n: string) =>
 // What a print is called: a pasted one by its marker, the rest by file name.
 const label = (print: Print) =>
   print.verb === 'pasted' ? `[Image #${name(print.path).replace(/\.png$/, '')}]` : name(print.path)
+const shownSetting = (value: string | boolean) => (typeof value === 'boolean' ? (value ? 'on' : 'off') : value)
+// ponytail: a set opener is split on spaces; quote-aware parsing if a viewer
+// path ever holds one.
+const openerArgv = (opener: string, isMac: boolean) =>
+  opener === 'auto' ? [isMac ? 'open' : 'xdg-open'] : opener.split(/\s+/)
 
 const digest = async (text: string) => {
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
   return [...hash.slice(0, 8)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-export const register: Register = (on, options) => {
-  const opener = typeof options.opener === 'string' && options.opener.trim() !== '' ? options.opener.trim() : 'auto'
-  const hasDevelop = options.develop !== false
-  const autoShow = options.autoShow === true
+// Where a strip puts its thumbnails: a page at a time, so they stay put while
+// browsing, and the hit layer that knows that layout.
+const stripLayout = (row: RowView) => {
+  const fits = Math.max(1, Math.floor((row.width + 1) / CELL))
+  const first = Math.floor(Math.max(0, row.at) / fits) * fits
+  const visible = row.strip.slice(first, first + fits)
+  const hit: Hit = {
+    role: 'strip',
+    ids: row.strip.map(one => one.id),
+    first,
+    cell: CELL,
+    rows: THUMB.rows + 1,
+    count: visible.length,
+    labels: visible.map(label),
+    more: row.strip.length - visible.length,
+    next: first + fits < row.strip.length ? first + fits : 0,
+  }
+  return { first, visible, hit }
+}
 
+// Where the viewer puts the picture on show: in a dark panel of one size per
+// row, sized by the screen and the row's widest picture, never by the one on
+// show, so browsing moves nothing under the pointer.
+const viewerLayout = (row: RowView, current: Print) => {
+  const frameRows = Math.max(8, Math.min(26, Math.round(row.screenRows * 0.45)))
+  const viewBox = (print: Print) =>
+    fit(print.width, print.height, Math.min(row.width - 4, viewColumns(print.width)), frameRows)
+  const panel = Math.min(row.width, Math.max(PANEL_MIN, ...row.strip.map(one => viewBox(one).columns + 4)))
+  const box = viewBox(current)
+  const hit: Hit = {
+    role: 'view',
+    ids: row.strip.map(one => one.id),
+    at: row.at,
+    picture: {
+      left: Math.floor((panel - box.columns) / 2),
+      top: Math.floor((frameRows - box.rows) / 2),
+      columns: box.columns,
+      rows: box.rows,
+    },
+  }
+  return { frameRows, panel, box, hit }
+}
+
+export const register: Register = on => {
   // What session.start finds out about the machine.
   let isKitty = false
+  let isMac = false
   let cwd = ''
   let home = ''
-  // ponytail: a configured opener is split on spaces; quote-aware parsing if a
-  // viewer path ever holds one.
-  let openWith = opener === 'auto' ? ['xdg-open'] : opener.split(/\s+/)
 
   // Set by session.start on the session's own `$`: the work runs off the event
   // that asks for it, so no tool call, edit or press waits on it.
@@ -198,25 +241,11 @@ export const register: Register = (on, options) => {
     </els.Box>
   )
 
-  // The thumbnails side by side, a page at a time so they stay put while
-  // browsing, under a clear layer that takes the clicks and the hover.
-  const drawStrip = (els: Elements, row: RowView) => {
-    const { Box, Client, Raster, Text } = els
-    const fits = Math.max(1, Math.floor((row.width + 1) / CELL))
-    const first = Math.floor(Math.max(0, row.at) / fits) * fits
-    const visible = row.strip.slice(first, first + fits)
-    const more = row.strip.length - visible.length
-    const hit: Hit = {
-      role: 'strip',
-      ids: row.strip.map(one => one.id),
-      first,
-      cell: CELL,
-      rows: THUMB.rows + 1,
-      count: visible.length,
-      labels: visible.map(label),
-      more,
-      next: first + fits < row.strip.length ? first + fits : 0,
-    }
+  // The thumbnails side by side, under the hit layer that takes the clicks
+  // and the hover.
+  const drawStrip = (els: Elements, row: RowView, layout: ReturnType<typeof stripLayout>, layer: RenderElement) => {
+    const { Box, Raster, Text } = els
+    const { first, visible, hit } = layout
     return (
       <Box>
         <Box gap={1}>
@@ -248,41 +277,27 @@ export const register: Register = (on, options) => {
               </Box>
             )
           })}
-          {more > 0 && <Text dimColor>{`+${more} ▶`}</Text>}
+          {hit.role === 'strip' && hit.more > 0 && <Text dimColor>{`+${hit.more} ▶`}</Text>}
         </Box>
         <Box position="absolute" top={0} left={0}>
-          <Client key="strip-hit" module="./hit.ts" width={row.width} height={THUMB.rows + 1} props={hit} />
+          {layer}
         </Box>
       </Box>
     )
   }
 
-  // The picture on show, in a dark panel of one size per row: sized by the
-  // screen and the row's widest picture, never by the one on show, so browsing
-  // moves nothing under the pointer.
+  // The picture on show in its dark panel, the toolbar on top, under the hit
+  // layer that takes the clicks on and beside the picture.
   const drawViewer = (
     els: Elements,
     row: RowView,
     current: Print,
+    layout: ReturnType<typeof viewerLayout>,
+    layer: RenderElement,
     acts: { step: (by: number) => unknown; shut: () => unknown },
   ) => {
-    const { Box, Button, Client, Text } = els
-    const frameRows = Math.max(8, Math.min(26, Math.round(row.screenRows * 0.45)))
-    const viewBox = (print: Print) =>
-      fit(print.width, print.height, Math.min(row.width - 4, viewColumns(print.width)), frameRows)
-    const panel = Math.min(row.width, Math.max(PANEL_MIN, ...row.strip.map(one => viewBox(one).columns + 4)))
-    const box = viewBox(current)
-    const hit: Hit = {
-      role: 'view',
-      ids: row.strip.map(one => one.id),
-      at: row.at,
-      picture: {
-        left: Math.floor((panel - box.columns) / 2),
-        top: Math.floor((frameRows - box.rows) / 2),
-        columns: box.columns,
-        rows: box.rows,
-      },
-    }
+    const { Box, Text } = els
+    const { frameRows, panel, box } = layout
     const count = row.strip.length
     const title = where(current)
     const meta = `${current.width}×${current.height} · ${current.format} · ${humanSize(current.bytes)}`
@@ -318,7 +333,7 @@ export const register: Register = (on, options) => {
             {hasHint && <Text dimColor>{HINT}</Text>}
           </Box>
           <Box position="absolute" top={1} left={0}>
-            <Client key="view-hit" module="./hit.ts" width={panel} height={frameRows} props={hit} />
+            {layer}
           </Box>
         </Box>
       </Box>
@@ -330,6 +345,10 @@ export const register: Register = (on, options) => {
       name: 'darkroom',
       description: 'Show the roll of images Claude worked on. Also: settings, set <name> <value>',
     })
+    const saved = await $.store.get('settings')
+    if (saved !== undefined && typeof saved === 'object') {
+      await update($, settings, () => ({ ...DEFAULTS, ...(saved as Partial<DarkroomSettings>) }))
+    }
     const term = `${(await $.env.get('TERM')) ?? ''} ${(await $.env.get('TERM_PROGRAM')) ?? ''}`
     const isKittyTerm =
       /kitty|ghostty/i.test(term) ||
@@ -339,19 +358,18 @@ export const register: Register = (on, options) => {
     // tmux, not from the far end of ssh. There the rows paint half-block cells.
     isKitty =
       isKittyTerm && (await $.env.get('TMUX')) === undefined && (await $.env.get('SSH_CONNECTION')) === undefined
-    if (opener === 'auto') {
-      const system = await $.process.run(['uname', '-s']).catch(() => undefined)
-      openWith = system?.stdout.trim() === 'Darwin' ? ['open'] : ['xdg-open']
-    }
+    isMac = (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Darwin'
     home = (await $.env.get('HOME')) ?? ''
     cwd = e.cwd
     const tmp = ((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/+$/, '') || '/tmp'
     const uid = (await $.process.run(['id', '-u']).catch(() => undefined))?.stdout.trim() ?? ''
     const cache = `${(await $.env.get('XDG_CACHE_HOME')) ?? `${home === '' ? '/tmp' : home}/.cache`}/claude-darkroom`
-    const works = async (argv: string[]) => (await $.process.run(argv).catch(() => undefined))?.exitCode === 0
-    const magick: ImageMagick | undefined = (await works(['magick', '-version']))
+    const hasMagick7 = (await $.process.run(['magick', '-version']).catch(() => undefined))?.exitCode === 0
+    const hasMagick6 =
+      !hasMagick7 && (await $.process.run(['convert', '-version']).catch(() => undefined))?.exitCode === 0
+    const magick: ImageMagick | undefined = hasMagick7
       ? { convert: ['magick'], identify: ['magick', 'identify'] }
-      : (await works(['convert', '-version']))
+      : hasMagick6
         ? { convert: ['convert'], identify: ['identify'] }
         : undefined
     let hasWarned = false
@@ -418,9 +436,9 @@ export const register: Register = (on, options) => {
       }
       const source = `${real}[0]`
       const shape = await $.process.run([...magick.identify, '-format', '%w %h %m', source])
-      const [w, h, format = '?'] = shape.stdout.trim().split(/\s+/)
-      const width = Number(w)
-      const height = Number(h)
+      const [wide, high, format = '?'] = shape.stdout.trim().split(/\s+/)
+      const width = Number(wide)
+      const height = Number(high)
       if (shape.exitCode !== 0 || !(width > 0 && height > 0) || width * height > MAX_PIXELS) {
         return undefined
       }
@@ -533,8 +551,11 @@ export const register: Register = (on, options) => {
         const copied = await $.ui.copy({ text: print.path, surface })
         $.ui.toast(copied.isCopied ? `◐ path copied: ${shown(print.path)}` : `◐ darkroom: ${copied.reason}`)
       },
+      // `open` hands the file on and returns; on Linux the viewer starts in a
+      // session of its own, so it outlives the call.
       open: async print => {
-        await $.process.run(['sh', '-c', DETACHED, 'darkroom', ...openWith, print.path]).catch(() => undefined)
+        const argv = [...openerArgv((await read($, settings)).opener, isMac), print.path]
+        await $.process.run(isMac ? argv : ['setsid', '-f', ...argv]).catch(() => undefined)
       },
     }
 
@@ -547,13 +568,11 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'darkroom' }, async ($, e) => {
     const [action = '', key = '', ...rest] = e.args.trim().split(/\s+/).filter(word => word !== '')
     if (action === 'settings') {
-      const now: Record<string, string> = {
-        opener: opener === 'auto' ? `auto (${openWith.join(' ')})` : opener,
-        develop: hasDevelop ? 'on' : 'off',
-        'auto-show': autoShow ? 'on' : 'off',
-      }
-      const rows = Object.entries(SETTINGS).map(([one, { help }]) => `  ${one.padEnd(10)} ${now[one]}  - ${help}`)
-      return { text: ['settings (/darkroom set <name> <value>, or /config):', ...rows].join('\n') }
+      const now = await read($, settings)
+      const rows = Object.entries(SETTINGS).map(
+        ([one, { field, help }]) => `  ${one.padEnd(10)} ${shownSetting(now[field])}  - ${help}`,
+      )
+      return { text: ['settings (/darkroom set <name> <value>):', ...rows].join('\n') }
     }
     if (action === 'set') {
       const setting = SETTINGS[key]
@@ -561,20 +580,13 @@ export const register: Register = (on, options) => {
         return { text: `no setting "${key}". ${USAGE}` }
       }
       const raw = rest.join(' ')
-      const value = setting.kind === 'boolean' ? SWITCH[raw.toLowerCase()] : raw === '' ? 'auto' : raw
+      const value = setting.field === 'opener' ? (raw === '' ? 'auto' : raw) : SWITCH[raw.toLowerCase()]
       if (value === undefined) {
         return { text: `${key} takes on or off.` }
       }
-      // The row's key is `<plugin>.<field>`, the plugin named as it was installed.
-      const row = (await $.config.list()).find(
-        one => one.key.split('.')[0]?.split('@')[0] === 'darkroom' && one.key.endsWith(`.${setting.field}`),
-      )
-      if (row === undefined) {
-        return { text: 'its settings are not in /config in this session.' }
-      }
-      const written = await $.config.set({ key: row.key, value })
-      const shownValue = typeof value === 'boolean' ? (value ? 'on' : 'off') : value
-      return { text: written.deny ?? `${key} is now ${shownValue}.` }
+      await update($, settings, now => ({ ...now, [setting.field]: value }))
+      await $.store.set('settings', await read($, settings))
+      return { text: `${key} is now ${shownSetting(value)}.` }
     }
     if (action !== '') {
       return { text: USAGE }
@@ -583,6 +595,8 @@ export const register: Register = (on, options) => {
     return { text: count === 0 ? 'no prints yet.' : `${count} print${count > 1 ? 's' : ''} on the roll.` }
   })
 
+  // Reads each call's arguments, and a command's or MCP tool's output, for the
+  // image paths it worked on. It never changes or answers a call.
   on('tool.call', async ($, e, next) => {
     const since = await $.clock.now()
     const ran = await next(e)
@@ -603,7 +617,7 @@ export const register: Register = (on, options) => {
   })
 
   // A pasted image: its marker painted amber in the box, its picture developed
-  // for the band above the box.
+  // for the band above the box. The draft is read for markers only.
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
     const marks = [...box.text.matchAll(PLACEHOLDER)]
@@ -623,9 +637,10 @@ export const register: Register = (on, options) => {
     return { ...box, decorations: [...(box.decorations ?? []), ...runs] }
   })
 
+  // Sending a prompt clears the pasted thumbnails and puts the open viewers
+  // away. The prompt passes on unchanged.
   on('prompt.submit', async ($, e, next) => {
     await update($, pasted, () => [])
-    // Moving on in the conversation puts the open viewers away.
     for (const id of openViews) {
       await update($, memberOf(viewing, { requestId: id }), () => -1)
     }
@@ -660,7 +675,7 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // The clicks and keys of the hit layers over a row's strip and viewer.
+  // The clicks, hover and keys of the hit layers over a row's strip and viewer.
   on('ui.message', async ($, e) => {
     if (e.element !== 'strip-hit' && e.element !== 'view-hit') {
       return {}
@@ -669,8 +684,8 @@ export const register: Register = (on, options) => {
     const view = memberOf(viewing, e)
     const key = post.key ?? ''
     const pick = post.pick
-    const printAt = async (at: number) => (await read($, prints)).find(one => one.id === post.ids[at])
     const hover = post.hover
+    const printAt = async (at: number) => (await read($, prints)).find(one => one.id === post.ids[at])
     if (hover !== undefined) {
       await update($, memberOf(hovered, e), () => ({ at: hover, item: post.item ?? '' }))
       return {}
@@ -747,11 +762,12 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
+    const { develop, autoShow } = await read($, settings)
     const isRoll = e.component === 'CommandOutput'
     const row = isRoll ? null : await next(e)
     const isOpen = isRoll || ((await read($, memberOf(isUnrolled, e))) ?? autoShow)
     const at = await read($, memberOf(viewing, e))
-    const hasDeveloped = !hasDevelop || isRoll || (await read($, memberOf(isDeveloped, e)))
+    const hasDeveloped = !develop || isRoll || (await read($, memberOf(isDeveloped, e)))
     const summary = strip.length === 1 ? `${label(lead)} · ${lead.width}×${lead.height}` : `${strip.length} images`
 
     if (e.surface !== 'terminal') {
@@ -772,7 +788,7 @@ export const register: Register = (on, options) => {
       )
     }
     const els = $.ui.resolve(e)
-    const { Box, Button, Text } = els
+    const { Box, Button, Client } = $.ui.resolve(e)
     const view: RowView = {
       requestId: e.requestId,
       strip,
@@ -792,11 +808,13 @@ export const register: Register = (on, options) => {
         await setAt(() => -1)
       }
     }
+    const stripAt = stripLayout(view)
+    const viewAt = current === undefined ? undefined : viewerLayout(view, current)
     return (
       <Box flexDirection="column">
         {row}
         {isRoll ? (
-          <Text dimColor>{`● darkroom: ${summary} on the roll`}</Text>
+          <els.Text dimColor>{`● darkroom: ${summary} on the roll`}</els.Text>
         ) : (
           <Box key="toggle-line">
             <Button
@@ -811,12 +829,25 @@ export const register: Register = (on, options) => {
         )}
         {isOpen && (
           <Box flexDirection="column" marginLeft={2}>
-            {drawStrip(els, view)}
+            {drawStrip(
+              els,
+              view,
+              stripAt,
+              <Client key="strip-hit" module="./hit.ts" width={view.width} height={THUMB.rows + 1} props={stripAt.hit} />,
+            )}
             {current !== undefined &&
-              drawViewer(els, view, current, {
-                step: by => setAt(now => Math.max(0, Math.min(strip.length - 1, now + by))),
-                shut: () => setAt(() => -1),
-              })}
+              viewAt !== undefined &&
+              drawViewer(
+                els,
+                view,
+                current,
+                viewAt,
+                <Client key="view-hit" module="./hit.ts" width={viewAt.panel} height={viewAt.frameRows} props={viewAt.hit} />,
+                {
+                  step: by => setAt(now => Math.max(0, Math.min(strip.length - 1, now + by))),
+                  shut: () => setAt(() => -1),
+                },
+              )}
           </Box>
         )}
       </Box>
