@@ -35,6 +35,8 @@ const AMBER = '#f5a623'
 const PANEL = '#161616'
 const LIT = '#2b2b2b'
 const INK = '#141414'
+// A button under the pointer: amber, as a lit menu entry.
+const LIT_BUTTON = { backgroundColor: AMBER, color: INK }
 const HINT = 'click a half to browse · beside to close'
 
 const BACK = ['left', 'h', 'up', 'k']
@@ -189,6 +191,13 @@ export const register: Register = (on, options) => {
     </els.Text>
   )
 
+  // A toolbar button, in a keyed Box so it lights up alone under the pointer.
+  const toolButton = (els: Elements, key: string, label: string, onPress: (press: { surface: RenderSurface }) => unknown) => (
+    <els.Box key={`tool-${key}`}>
+      <els.Button key={key} label={label} plain hover={LIT_BUTTON} onPress={onPress} />
+    </els.Box>
+  )
+
   // The thumbnails side by side, a page at a time so they stay put while
   // browsing, under a clear layer that takes the clicks and the hover.
   const drawStrip = (els: Elements, row: RowView) => {
@@ -283,15 +292,15 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" width={panel} backgroundColor={PANEL}>
           <Box width={panel} justifyContent="space-between" paddingX={1}>
             <Box>
-              <Button key="prev" label=" ◀ " plain onPress={() => acts.step(-1)} />
+              {toolButton(els, 'prev', ' ◀ ', () => acts.step(-1))}
               <Text>{` ${String(row.at + 1).padStart(String(count).length)}/${count} `}</Text>
-              <Button key="next" label=" ▶ " plain onPress={() => acts.step(1)} />
+              {toolButton(els, 'next', ' ▶ ', () => acts.step(1))}
             </Box>
             <Box gap={1}>
-              <Button key="copy-image" label="⧉ image" plain onPress={() => act.copyImage(current)} />
-              <Button key="copy-path" label="⎘ path" plain onPress={press => act.copyPath(current, press.surface)} />
-              <Button key="open" label="↗ open" plain onPress={() => act.open(current)} />
-              <Button key="shut" label=" ✕ " plain onPress={acts.shut} />
+              {toolButton(els, 'copy-image', ' ⧉ image ', () => act.copyImage(current))}
+              {toolButton(els, 'copy-path', ' ⎘ path ', press => act.copyPath(current, press.surface))}
+              {toolButton(els, 'open', ' ↗ open ', () => act.open(current))}
+              {toolButton(els, 'shut', ' ✕ ', acts.shut)}
             </Box>
           </Box>
           <Box key="frame" width={panel} height={frameRows} justifyContent="center" alignItems="center">
@@ -789,13 +798,16 @@ export const register: Register = (on, options) => {
         {isRoll ? (
           <Text dimColor>{`● darkroom: ${summary} on the roll`}</Text>
         ) : (
-          <Button
-            key="toggle"
-            label={`● darkroom: ${summary} — click to ${isOpen ? 'hide' : 'show'}`}
-            plain
-            dimColor
-            onPress={toggle}
-          />
+          <Box key="toggle-line">
+            <Button
+              key="toggle"
+              label={`● darkroom: ${summary} — click to ${isOpen ? 'hide' : 'show'}`}
+              plain
+              dimColor
+              hover={{ color: AMBER, dimColor: false }}
+              onPress={toggle}
+            />
+          </Box>
         )}
         {isOpen && (
           <Box flexDirection="column" marginLeft={2}>
