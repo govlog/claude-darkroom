@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-darkroom",
+  "description": "darkroom, a Claude Code mod: the images Claude works on, right in the chat.",
+  "owner": {
+    "name": "govlog"
+  },
+  "plugins": [
+    {
+      "name": "darkroom",
+      "description": "The images Claude reads, writes or makes, and the ones you paste, as a film strip right in the chat: a grey line to unroll, a viewer to browse, a develop under a red safelight (kitty graphics: Ghostty, kitty).",
+      "version": "0.1.0",
+      "author": {
+        "name": "govlog"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/govlog/claude-darkroom"
+    }
+  ]
+}

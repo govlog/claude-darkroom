@@ -1,0 +1,41 @@
+{
+  "name": "darkroom",
+  "version": "0.1.0",
+  "description": "The images Claude reads, writes or makes, and the ones you paste, as a film strip right in the chat: a grey line to unroll, a viewer to browse, a develop under a red safelight (kitty graphics: Ghostty, kitty).",
+  "author": {
+    "name": "govlog",
+    "url": "https://github.com/govlog"
+  },
+  "homepage": "https://github.com/govlog/claude-darkroom",
+  "repository": "https://github.com/govlog/claude-darkroom",
+  "license": "MIT",
+  "keywords": [
+    "mod",
+    "images",
+    "viewer",
+    "screenshots",
+    "kitty-graphics",
+    "ghostty"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "opener": {
+      "type": "string",
+      "title": "darkroom: open images with",
+      "description": "Command that opens an image; the path is added last. auto: open on macOS, xdg-open elsewhere.",
+      "default": "auto"
+    },
+    "develop": {
+      "type": "boolean",
+      "title": "darkroom: develop animation",
+      "description": "Play the safelight develop the first time a strip unrolls.",
+      "default": true
+    },
+    "autoShow": {
+      "type": "boolean",
+      "title": "darkroom: show the strip without a click",
+      "description": "Unroll the film strip under each row that holds images, without a click.",
+      "default": false
+    }
+  }
+}
