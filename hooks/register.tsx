@@ -4,6 +4,7 @@ import type { ElementTable, Register, RenderSurface } from 'claude-code'
 import type { Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
 import type { Cells, Grid } from './develop'
+import { MENU_IMAGE, MENU_PATH } from './hit'
 import type { Hit } from './hit'
 
 // The roll. ponytail: each print keeps a small pixel grid in session state;
@@ -32,6 +33,8 @@ const pasteColumns = (px: number) => Math.min(4 * PASTE_ROWS, Math.ceil(px / 6))
 
 const AMBER = '#f5a623'
 const PANEL = '#161616'
+const LIT = '#2b2b2b'
+const HINT = 'click a half to browse · beside to close'
 
 const BACK = ['left', 'h', 'up', 'k']
 const FORTH = ['right', 'l', 'down', 'j', 'tab', ' ']
@@ -45,7 +48,7 @@ const SKIP = new Set(['tool', 'tool_use_id', 'agentId', 'content', 'old_string',
 // Puts a PNG on the system clipboard. The tools fork to serve the clipboard,
 // so their output goes to /dev/null and no pipe of ours stays open. The path
 // is an argument, never part of the script.
-const COPY_IMAGE = [
+const CLIPBOARD_SCRIPT = [
   '{ if [ "$(uname -s)" = Darwin ]; then osascript -e "on run argv"',
   '-e "set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)" -e "end run" "$1";',
   'elif [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy; then wl-copy --type image/png <"$1";',
@@ -69,6 +72,7 @@ const shots = atom({ plugin: 'darkroom', key: 'shots' } as const, [])
 const isUnrolled = atom({ plugin: 'darkroom', key: 'isUnrolled' } as const, null)
 const viewing = atom({ plugin: 'darkroom', key: 'viewing' } as const, -1)
 const isDeveloped = atom({ plugin: 'darkroom', key: 'isDeveloped' } as const, false)
+const hovered = atom({ plugin: 'darkroom', key: 'hovered' } as const, -1)
 const pasted = atom({ plugin: 'darkroom', key: 'pasted' } as const, [])
 
 /** An image to develop: a path a tool call named, or a pasted image by its number. */
@@ -78,10 +82,27 @@ type Job = { verb: Verb; tool: string; since: number; useId?: string; tries: num
 )
 type ImageMagick = { convert: string[]; identify: string[] }
 /** What a hit layer posts: a pick, a copy from the hover menu, a step, a key. */
-type Post = { ids: string[]; pick?: number; copy?: 'image' | 'path'; step?: number; shut?: boolean; fold?: boolean; key?: string }
+type Post = {
+  ids: string[]
+  pick?: number
+  copy?: 'image' | 'path'
+  hover?: number
+  step?: number
+  shut?: boolean
+  fold?: boolean
+  key?: string
+}
 type Elements = ElementTable<'terminal'>
 /** One transcript row's darkroom, as its drawing needs it. */
-type RowView = { requestId: string; strip: Print[]; at: number; width: number; screenRows: number; hasDeveloped: boolean }
+type RowView = {
+  requestId: string
+  strip: Print[]
+  at: number
+  hovered: number
+  width: number
+  screenRows: number
+  hasDeveloped: boolean
+}
 
 const name = (path: string) => path.slice(path.lastIndexOf('/') + 1)
 const humanSize = (bytes: number) =>
@@ -195,9 +216,18 @@ export const register: Register = (on, options) => {
                     <Raster key={`dev-${print.id}`} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 0)} />
                   )}
                 </Box>
-                <Text color={isCurrent ? AMBER : undefined} dimColor={!isCurrent} wrap="truncate-middle">
-                  {label(print)}
-                </Text>
+                {first + i === row.hovered ? (
+                  <Box>
+                    <Text backgroundColor={LIT} color={AMBER}>
+                      {MENU_IMAGE}
+                    </Text>
+                    <Text backgroundColor={LIT}>{MENU_PATH}</Text>
+                  </Box>
+                ) : (
+                  <Text color={isCurrent ? AMBER : undefined} dimColor={!isCurrent} wrap="truncate-middle">
+                    {label(print)}
+                  </Text>
+                )}
               </Box>
             )
           })}
@@ -237,6 +267,9 @@ export const register: Register = (on, options) => {
       },
     }
     const count = row.strip.length
+    const title = where(current)
+    const meta = `${current.width}×${current.height} · ${current.format} · ${humanSize(current.bytes)}`
+    const hasHint = title.length + meta.length + HINT.length + 5 <= panel
     return (
       <Box width={row.width - 2} justifyContent="center" marginTop={1}>
         <Box flexDirection="column" width={panel} backgroundColor={PANEL}>
@@ -259,13 +292,13 @@ export const register: Register = (on, options) => {
           <Box width={panel} paddingX={1} justifyContent="space-between">
             <Box gap={1} flexShrink={1}>
               <Text bold wrap="truncate-middle">
-                {where(current)}
+                {title}
               </Text>
               <Text dimColor wrap="truncate">
-                {`${current.width}×${current.height} · ${current.format} · ${humanSize(current.bytes)}`}
+                {meta}
               </Text>
             </Box>
-            {panel >= 72 && <Text dimColor>click a half to browse · beside to close</Text>}
+            {hasHint && <Text dimColor>{HINT}</Text>}
           </Box>
           <Box position="absolute" top={1} left={0}>
             <Client key="view-hit" module="./hit.ts" width={panel} height={frameRows} props={hit} />
@@ -472,7 +505,7 @@ export const register: Register = (on, options) => {
 
     act = {
       copyImage: async print => {
-        const copied = await $.process.run(['sh', '-c', COPY_IMAGE, 'darkroom', print.png]).catch(() => undefined)
+        const copied = await $.process.run(['sh', '-c', CLIPBOARD_SCRIPT, 'darkroom', print.png]).catch(() => undefined)
         $.ui.toast(
           copied?.exitCode === 0
             ? `◐ image copied: ${label(print)}`
@@ -620,8 +653,14 @@ export const register: Register = (on, options) => {
     const key = post.key ?? ''
     const pick = post.pick
     const printAt = async (at: number) => (await read($, prints)).find(one => one.id === post.ids[at])
+    const hover = post.hover
+    if (hover !== undefined) {
+      await update($, memberOf(hovered, e), () => hover)
+      return {}
+    }
     if (post.fold === true) {
       await update($, memberOf(isUnrolled, e), () => false)
+      await update($, memberOf(hovered, e), () => -1)
       await update($, view, () => -1)
     } else if (post.shut === true || SHUT.includes(key)) {
       await update($, view, () => -1)
@@ -721,6 +760,7 @@ export const register: Register = (on, options) => {
       requestId: e.requestId,
       strip,
       at,
+      hovered: isOpen ? await read($, memberOf(hovered, e)) : -1,
       width: Math.max(THUMB.columns, (e.viewport?.columns ?? 80) - 4),
       screenRows: e.viewport?.rows ?? 40,
       hasDeveloped,
@@ -730,6 +770,7 @@ export const register: Register = (on, options) => {
     const toggle = async () => {
       const willOpen = !((await read($, memberOf(isUnrolled, e))) ?? autoShow)
       await update($, memberOf(isUnrolled, e), () => willOpen)
+      await update($, memberOf(hovered, e), () => -1)
       if (!willOpen) {
         await setAt(() => -1)
       }

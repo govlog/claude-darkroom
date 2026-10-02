@@ -32,6 +32,8 @@ declare module 'claude-code' {
       viewing: StateFamily<number>
       /** Whether a row's strip has played its develop, by the row's requestId. */
       isDeveloped: StateFamily<boolean>
+      /** The strip index whose hover menu shows, by the row's requestId; -1 for none. */
+      hovered: StateFamily<number>
       /** The images pasted in the prompt box, by their [Image #N] numbers. */
       pasted: number[]
     }

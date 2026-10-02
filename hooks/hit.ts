@@ -19,28 +19,40 @@ export type Hit =
     }
   | { role: 'view'; ids: string[]; at: number; picture: Spot }
 
-/** The thumbnail slot under the pointer, and how many ticks it has rested there. */
-type Look = { slot: number; ticks: number }
+/** The hover menu a thumbnail's label row shows; the hooks module draws it. */
+export const MENU_IMAGE = ' ⧉ image '
+export const MENU_PATH = ' ⎘ path '
+
+/**
+ * The slot under the pointer, how long it has rested there, whether its menu
+ * shows, and the props of the last drawing. Changed in place, never through
+ * setState: a redraw of the layer would wipe the pictures under it.
+ */
+type Look = { slot: number; ticks: number; isMenu: boolean; hit: Hit }
 
 const HOLD = 5 // ticks of 100 ms the pointer rests on a thumbnail before its menu shows
-const COPY_IMAGE = ' ⧉ image '
-const COPY_PATH = ' ⎘ path '
-const LIT = '#2b2b2b'
-const AMBER = '#f5a623'
 
-// A clear layer over the pictures: it tells the hooks module what a click
-// hit, offers the copy actions on a thumbnail the pointer rests on, and
-// passes the keys on while a click has given it the focus.
+// A clear layer over the pictures. It never draws: it tells the hooks module
+// what a click hit and which thumbnail the pointer rests on, and passes the
+// keys on while a click has given it the focus.
 const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
-  const { Box, Text } = surface.elements
+  const { Box } = surface.elements
   if (surface.state === undefined) {
-    surface.setState({ slot: -1, ticks: 0 })
+    const look: Look = { slot: -1, ticks: 0, isMenu: false, hit }
+    surface.setState(look)
     surface.every(100, () => {
-      const look = surface.state
-      if (look !== undefined && look.slot >= 0 && look.ticks < HOLD) {
-        surface.setState({ ...look, ticks: look.ticks + 1 })
+      const now = look.hit
+      if (now.role !== 'strip' || look.slot < 0 || look.isMenu) {
+        return
+      }
+      look.ticks += 1
+      if (look.ticks >= HOLD) {
+        look.isMenu = true
+        surface.post({ ids: now.ids, hover: now.first + look.slot })
       }
     })
+  } else {
+    surface.state.hit = hit
   }
   surface.onKey(event => surface.post({ ids: hit.ids, key: event.key }))
 
@@ -68,11 +80,17 @@ const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
     return isOnSlot ? slot : -1
   }
   surface.onPointer(event => {
+    const look = surface.state
+    if (look === undefined) {
+      return
+    }
     const slot = event.type === 'leave' ? -1 : slotAt(event)
-    const look = surface.state ?? { slot: -1, ticks: 0 }
     if (event.type !== 'up') {
       if (slot !== look.slot) {
-        surface.setState({ slot, ticks: 0 })
+        if (look.isMenu) {
+          surface.post({ ids: hit.ids, hover: -1 })
+        }
+        Object.assign(look, { slot, ticks: 0, isMenu: false })
       }
       return
     }
@@ -88,32 +106,15 @@ const HitLayer: ClientModule<Hit, Look> = (hit, surface) => {
     }
     const offset = event.x - slot * hit.cell
     const isMenu =
-      look.slot === slot && look.ticks >= HOLD && event.y === hit.rows - 1 && offset < COPY_IMAGE.length + COPY_PATH.length
+      look.slot === slot && look.isMenu && event.y === hit.rows - 1 && offset < MENU_IMAGE.length + MENU_PATH.length
     surface.post(
       isMenu
-        ? { ids: hit.ids, pick: hit.first + slot, copy: offset < COPY_IMAGE.length ? 'image' : 'path' }
+        ? { ids: hit.ids, pick: hit.first + slot, copy: offset < MENU_IMAGE.length ? 'image' : 'path' }
         : { ids: hit.ids, pick: hit.first + slot },
     )
   })
 
-  const look = surface.state ?? { slot: -1, ticks: 0 }
-  if (look.slot < 0) {
-    return Box({})
-  }
-  // The label row of the thumbnail under the pointer: lit at once, then the
-  // copy actions once the pointer has rested there.
-  const width = hit.cell - 1
-  const row =
-    look.ticks >= HOLD
-      ? [
-          Text({ backgroundColor: LIT, color: AMBER, children: COPY_IMAGE }),
-          Text({ backgroundColor: LIT, children: COPY_PATH.padEnd(width - COPY_IMAGE.length) }),
-        ]
-      : [Text({ backgroundColor: LIT, children: (hit.labels[look.slot] ?? '').slice(0, width).padEnd(width) })]
-  return Box({
-    flexDirection: 'column',
-    children: [Box({ height: hit.rows - 1 }), Box({ marginLeft: look.slot * hit.cell, children: row })],
-  })
+  return Box({})
 }
 
 export default HitLayer

@@ -2,6 +2,8 @@
 
 A [Claude Code](https://claude.com/claude-code) mod that puts the images Claude works on right in the chat.
 
+![darkroom in a Claude Code session: the grey line under a command and its film strip](docs/strip.png)
+
 Every image Claude reads, writes or makes (screenshots, renders, diagrams, exports) and every image you paste gets a grey line under its row:
 
 ```
