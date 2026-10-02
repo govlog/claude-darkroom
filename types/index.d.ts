@@ -44,4 +44,9 @@ declare module 'claude-code' {
       pasted: number[]
     }
   }
+
+  interface McpToolInputs {
+    /** darkroom's own tool: the image files the person asked to see. */
+    mcp__darkroom__show: { paths: string[] }
+  }
 }

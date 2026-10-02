@@ -44,6 +44,7 @@ const world = (
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'sess' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('tool.register', ($, e) => ({ value: { tool: `mcp__darkroom__${e.name}` } }))
   on('fs.stat', ($, e) => {
     const mtimeMs = disk[e.path]
     return mtimeMs === undefined
@@ -456,6 +457,33 @@ test('sending a prompt puts the open viewer away', async ($, on) => {
   await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false })
   expect(await ui.find({ type: 'Image', key: 'view' })).toBeUndefined()
   await ui.unmount()
+})
+
+test('the show tool puts the images Claude names on the roll, old ones too, and says what it skipped', async ($, on) => {
+  const old = NOW - 60_000
+  const w = world(on, { disk: { '/work/icons/a.png': old, '/work/icons/b.png': old, '/work/favicon.ico': old } })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const shown = await $.tool.call({
+    tool: 'mcp__darkroom__show',
+    paths: ['icons/a.png', '/work/icons/b.png', '/work/favicon.ico', '/work/gone.png'],
+  })
+  expect(shown.result).toBe(
+    'Showing 2 images to the person, in a strip under this call: a.png, b.png. Skipped: ' +
+      '/work/favicon.ico: not a format darkroom shows (PNG, JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF); ' +
+      '/work/gone.png: no such file.',
+  )
+  await w.clock.advance(0)
+  await w.clock.advance(5000)
+  const roll = await $.ui.mount({
+    plugin: 'darkroom',
+    surface: 'terminal',
+    component: 'CommandOutput',
+    viewport: VIEWPORT,
+    props: { command: 'darkroom', args: '', text: '2 prints on the roll.', isErrored: false },
+  })
+  const files = (await roll.findAll({ type: 'Image' })).map(one => (one.props.source as { file: string }).file)
+  expect(files).toEqual(['/work/icons/a.png', '/work/icons/b.png'])
+  await roll.unmount()
 })
 
 test('a decompression bomb is never decoded', async ($, on) => {

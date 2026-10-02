@@ -1,5 +1,5 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { ElementTable, Register, RenderSurface } from 'claude-code'
+import type { ElementTable, FsStat, Register, RenderSurface } from 'claude-code'
 
 import type { DarkroomSettings, Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
@@ -93,6 +93,30 @@ const SETTINGS: Record<string, { field: keyof DarkroomSettings; help: string }> 
 const SWITCH: Record<string, boolean> = { on: true, off: false, true: true, false: false, yes: true, no: false }
 const USAGE = 'usage: /darkroom, /darkroom settings, /darkroom set <opener|develop|auto-show> <value>'
 
+// The tool darkroom gives Claude, for when the person asks to see images.
+const SHOW = 'mcp__darkroom__show'
+const FORMATS = 'PNG, JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF'
+const SHOW_TOOL = {
+  name: 'show',
+  description: [
+    'Show image files to the person in the chat, as a film strip under this call.',
+    'Use it when they ask to see, show or display images: find the files first, then pass their paths.',
+    `It shows ${FORMATS}, ${ROLL} at most per call.`,
+    'You get back which images show, never their pixels: Read a file to look at it yourself.',
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      paths: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Image files: absolute paths, or relative to the session folder.',
+      },
+    },
+    required: ['paths'],
+  },
+}
+
 const prints = atom({ plugin: 'darkroom', key: 'prints' } as const, [])
 const settings = atom({ plugin: 'darkroom', key: 'settings' } as const, DEFAULTS)
 const shots = atom({ plugin: 'darkroom', key: 'shots' } as const, [])
@@ -154,6 +178,18 @@ const shownSetting = (value: string | boolean) => (typeof value === 'boolean' ? 
 // path ever holds one.
 const openerArgv = (opener: string, isMac: boolean) =>
   opener === 'auto' ? [isMac ? 'open' : 'xdg-open'] : opener.split(/\s+/)
+
+const extensionOf = (path: string) => path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+
+// Why a file cannot go on the roll, or '' when it can.
+const unfit = (stat: FsStat) =>
+  stat.kind !== 'file' || stat.size === 0
+    ? 'not an image file'
+    : stat.size > MAX_BYTES
+      ? 'over 64 MB'
+      : CODERS[extensionOf(stat.realPath ?? '')] === undefined
+        ? `not a format darkroom shows (${FORMATS})`
+        : ''
 
 const digest = async (text: string) => {
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
@@ -240,6 +276,7 @@ export const register: Register = on => {
   let isMac = false
   let cwd = ''
   let home = ''
+  let hasImageMagick = false
 
   // Set by session.start on the session's own `$`: the work runs off the event
   // that asks for it, so no tool call, edit or press waits on it.
@@ -266,6 +303,7 @@ export const register: Register = on => {
         ? `~${path.slice(home.length)}`
         : path
   const where = (print: Print) => (print.verb === 'pasted' ? `${label(print)} (pasted)` : shown(print.path))
+  const expand = (path: string) => (path.startsWith('~/') && home !== '' ? `${home}${path.slice(1)}` : path)
 
   // The drawing helpers take the surface's elements, never `$`.
 
@@ -370,6 +408,8 @@ export const register: Register = on => {
       name: 'darkroom',
       description: 'Show the roll of images Claude worked on. Also: settings, set <name> <value>',
     })
+    // Without the tool, the rest of darkroom still works.
+    await $.tool.register(SHOW_TOOL).catch(() => undefined)
     const saved = await $.store.get('settings')
     if (saved !== undefined && typeof saved === 'object') {
       await update($, settings, () => ({ ...DEFAULTS, ...(saved as Partial<DarkroomSettings>) }))
@@ -402,6 +442,7 @@ export const register: Register = on => {
       : hasMagick6
         ? { convert: ['convert'], identify: ['identify'] }
         : undefined
+    hasImageMagick = magick !== undefined
     let hasWarned = false
     let isBusy = false
     let pasteFolder = { session: '', path: '' }
@@ -426,7 +467,7 @@ export const register: Register = on => {
 
     const locate = async (job: Job) => {
       if ('path' in job) {
-        return job.path.startsWith('~/') && home !== '' ? `${home}${job.path.slice(1)}` : job.path
+        return expand(job.path)
       }
       const file = await pastedFile(job.paste)
       if (file === undefined && job.tries < PASTE_TRIES) {
@@ -445,7 +486,7 @@ export const register: Register = on => {
       const stat = path === undefined ? undefined : await $.fs.stat(path, { resolve: true }).catch(() => undefined)
       // Always absolute, so ImageMagick never reads it as a coder prefix or a pipe.
       const real = stat?.realPath
-      if (stat === undefined || real === undefined || stat.kind !== 'file' || stat.size === 0 || stat.size > MAX_BYTES) {
+      if (stat === undefined || real === undefined || unfit(stat) !== '') {
         return undefined
       }
       // A path a call only named (an `ls`, a grep hit) is not an image it worked on.
@@ -456,7 +497,7 @@ export const register: Register = on => {
       if (known !== undefined) {
         return known
       }
-      const extension = real.slice(real.lastIndexOf('.') + 1).toLowerCase()
+      const extension = extensionOf(real)
       const coder = CODERS[extension]
       if (coder === undefined) {
         return undefined
@@ -661,6 +702,48 @@ export const register: Register = on => {
       wake()
     }
     return ran
+  })
+
+  // darkroom's own tool: Claude passes the images the person asked to see, and
+  // they go on a strip under the call, unrolled. Claude gets back their names,
+  // never their pixels.
+  on('tool.call', { tool: SHOW }, async ($, e) => {
+    const asked = (e as { paths?: unknown }).paths
+    if (!Array.isArray(asked)) {
+      return { deny: 'Pass paths: a list of image files.' }
+    }
+    const paths = [...new Set(asked.filter((one): one is string => typeof one === 'string' && one.trim() !== ''))]
+    const since = await $.clock.now()
+    const showing: string[] = []
+    const skipped: string[] = []
+    for (const path of paths.slice(0, ROLL)) {
+      const full = expand(path.trim())
+      const stat = await $.fs.stat(full.startsWith('/') ? full : `${cwd}/${full}`, { resolve: true }).catch(() => undefined)
+      const real = stat?.realPath
+      const why =
+        stat === undefined || real === undefined
+          ? 'no such file'
+          : unfit(stat) || (extensionOf(real) !== 'png' && !hasImageMagick ? 'needs ImageMagick' : '')
+      if (why !== '' || real === undefined) {
+        skipped.push(`${path}: ${why}`)
+        continue
+      }
+      showing.push(name(real))
+      // A read on the person's behalf: an old file shows as well as a new one.
+      queue.push({ path: real, verb: 'read', tool: 'show', since, useId: e.tool_use_id, tries: 0 })
+    }
+    if (showing.length > 0) {
+      await update($, memberOf(isUnrolled, { requestId: e.tool_use_id }), () => true)
+      wake()
+    }
+    const said = [
+      showing.length > 0
+        ? `Showing ${showing.length} image${showing.length > 1 ? 's' : ''} to the person, in a strip under this call: ${showing.join(', ')}.`
+        : 'No image to show.',
+      ...(skipped.length > 0 ? [`Skipped: ${skipped.join('; ')}.`] : []),
+      ...(paths.length > ROLL ? [`Only the first ${ROLL} paths were taken.`] : []),
+    ]
+    return { result: said.join(' ') }
   })
 
   // A pasted image: its marker painted amber in the box, its picture developed

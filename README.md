@@ -49,6 +49,15 @@ A screenshot Claude read, a chart a script rendered, an export an MCP tool saved
 
 ![The film strip of the six images, unrolled under the grey line](docs/strip.png)
 
+### Ask Claude to show you images
+
+```
+> show me the icons of this project
+> display the 3 screenshots in docs/
+```
+
+darkroom gives Claude a `show` tool. Claude finds the files and passes their paths, and the strip unrolls under the call, old images as well as new ones. Claude gets back their names, never their pixels.
+
 ### Copy without opening
 
 ![The hover menu of a print, its path entry lit in amber](docs/hover.png)
@@ -100,7 +109,8 @@ A setting takes effect at once and is kept for the next sessions, in the plugin'
 <details>
 <summary><b>How it works</b></summary>
 
-- A `tool.call` hook looks for image paths in each call's arguments and, for commands and MCP tools, in its output. A path counts only if the call read it, wrote it, or changed it: an `ls` that lists images does not put them on the roll.
+- A `tool.call` hook looks for image paths in each call's arguments and, for commands and MCP tools, in its output. A path counts only if the call read it, wrote it, or changed it: an `ls` that lists images does not put them on the roll. To see what a listing found, ask Claude to show it.
+- `show` is a tool darkroom declares for Claude, `mcp__darkroom__show`. Claude passes it image paths. darkroom checks each one, puts it on a strip under the call, and answers with the names it shows and the ones it skipped, with why.
 - A PNG is read and decoded by darkroom itself, inside the mod's sandbox: its size from its header, and the small pixel grid the develop and the half-block fallback paint from. The terminal draws the picture straight from the file.
 - Any other format goes to ImageMagick, under the policy darkroom ships: it reads the size, writes a PNG copy into Claude Code's own temporary folder and prints the pixel grid.
 - The rows are `ui.render` hooks on tool results, tool groups, your messages and the output of `/darkroom`. Each picture is an `Image` element: Claude Code passes it to the terminal with the kitty graphics protocol. A clear `Client` layer over the pictures and the viewer's toolbar takes the clicks, the hover and the keys, and never draws, so the pictures stay. A press over it never reaches the transcript: a quick click or one that slips never selects text.
@@ -146,13 +156,14 @@ setsid -f xdg-open '<image>'
 
 **Hooks it uses, and what they do.**
 
-- `tool.call` reads each call's arguments, and the output of commands and MCP tools, for the image paths the call worked on. It never changes or answers a call.
+- `tool.call` reads each call's arguments, and the output of commands and MCP tools, for the image paths the call worked on. It never changes another tool's call, and answers only darkroom's own `show`.
+- `tool.register` declares the `show` tool, once per session. Claude can call it without asking you: it only puts images on your screen and tells Claude their names.
 - `prompt.edit` reads your draft for `[Image #N]` markers only, to paint them amber and show their pictures.
 - `prompt.submit` clears the pasted thumbnails and closes the open viewers. Your prompt passes on unchanged.
 - `command.run` answers `/darkroom` and nothing else.
 - `ui.render` and `ui.message` draw the rows and take the clicks, hover and keys over them.
 
-**What it reads and writes.** It reads the images a tool call names, your pasted images, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`. darkroom itself writes no file: it keeps a small pixel grid per image in the session's state and your settings in its store. Only ImageMagick writes, for a non-PNG image: its PNG copy, in Claude Code's own temporary folder, which only you can read.
+**What it reads and writes.** It reads the images a tool call names, the ones Claude passes to `show`, your pasted images, and these variables: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`. darkroom itself writes no file: it keeps a small pixel grid per image in the session's state and your settings in its store. Only ImageMagick writes, for a non-PNG image: its PNG copy, in Claude Code's own temporary folder, which only you can read.
 
 **The tests.** `tests/` stand in for Claude Code: they answer `process.run`, `tool.call`, the store and the rest, and call `tool.call`, `command.run` and `prompt.submit` the way Claude Code does, to check how the mod reacts. The mod itself makes none of those calls. `demo/make-images.sh` draws the screenshot images with ImageMagick.
 
@@ -161,6 +172,7 @@ setsid -f xdg-open '<image>'
 
 - A mod sees no click on the other rows of the chat. A viewer closes on a click beside its picture, when another viewer opens, and when you send a prompt.
 - A path with a space in it is not picked up. A relative path is resolved against the session's folder.
+- `show` takes 64 paths at most per call.
 - Pasted images are read from the folder the engine keeps them in (`<tmp>/claude-<uid>/<project>/<session>/images/`), which no API names.
 - In an expanded tool group (ctrl+o) the rows show no line; the folded group and standalone results do.
 - Images over 64 megapixels or 64 MB are left out, and a PNG over 4 MB goes to ImageMagick. Treat untrusted image files as you would in any viewer.
