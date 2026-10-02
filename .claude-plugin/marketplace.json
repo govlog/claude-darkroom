@@ -1,5 +1,4 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-darkroom",
   "description": "darkroom, a Claude Code mod: the images Claude works on, right in the chat.",
   "owner": {
@@ -14,8 +13,7 @@
         "name": "govlog"
       },
       "source": "./",
-      "category": "productivity",
-      "homepage": "https://github.com/govlog/claude-darkroom"
+      "category": "productivity"
     }
   ]
 }
