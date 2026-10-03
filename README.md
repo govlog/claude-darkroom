@@ -130,7 +130,7 @@ darkroom never puts text in a prompt, runs a tool or runs a command of its own a
 **Programs it runs, and why.** Each by name with its arguments, the image path always one argument of its own:
 
 - No program for a PNG: darkroom decodes it in its own sandbox, with no access to files, programs or the network beyond what Claude Code hands it.
-- ImageMagick (`magick`, or `convert` and `identify`), for the other formats only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and runs it under [`magick/policy.xml`](magick/policy.xml): those formats and nothing else, no delegate program, no network, no indirect file lists, bounded memory, size and time.
+- ImageMagick (`magick`, or `convert` and `identify`), for the other formats only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and runs it under [`magick/policy.xml`](magick/policy.xml): those formats and nothing else, no delegate program, no network, no indirect file lists, bounded memory, size and time. The policy reaches ImageMagick as its configure path, given to that one process and to nothing else, on top of the system's own policy.
 - `magick -version`, or else `convert -version`, once per session: to see whether ImageMagick is installed, and which version.
 - `id -u`, once per session, and on macOS `getconf DARWIN_USER_TEMP_DIR`: to find Claude Code's own temporary folder, `<tmp>/claude-<uid>`, where it keeps your pasted images and where ImageMagick leaves its PNG copies. `<tmp>` is `/tmp` on Linux and the folder `getconf` names on macOS: darkroom reads no environment variable. macOS is told from Linux by a file only macOS has, with no program.
 - To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file, or runs `xclip` where `wl-copy` is missing or fails (no Wayland display), the path passed as an argument, never part of the script. It reads no variable of the environment.
@@ -144,7 +144,7 @@ id -u
 getconf DARWIN_USER_TEMP_DIR     # macOS only
 magick -version                  # or, without ImageMagick 7: convert -version
 
-# a JPEG, GIF, WebP, AVIF, SVG, BMP or TIFF image, with MAGICK_CONFIGURE_PATH=<plugin>/magick
+# a JPEG, GIF, WebP, AVIF, SVG, BMP or TIFF image, under the policy file in <plugin>/magick
 # (JPEG: stands for the decoder the extension names; ImageMagick 6 runs convert and identify)
 magick identify -format '%w %h %m' 'JPEG:<image>[0]'
 magick 'JPEG:<image>[0]' -resize '2048x2048>' 'PNG:<tmp>/claude-<uid>/darkroom-<id>.png'
@@ -178,7 +178,7 @@ setsid -f xdg-open '<image>'
 
 - A mod sees no click on the other rows of the chat. A viewer closes on a click beside its picture, when another viewer opens, and when you send a prompt.
 - A path with a space in it, or written with `~`, is not picked up. A relative path is resolved against the session's folder.
-- darkroom looks for Claude Code's temporary folder at `/tmp/claude-<uid>` (on macOS, under the folder `getconf DARWIN_USER_TEMP_DIR` names). With `TMPDIR` or `CLAUDE_CODE_TMPDIR` set by hand, pasted images do not show and the formats other than PNG are not converted.
+- darkroom looks for Claude Code's temporary folder at `/tmp/claude-<uid>` (on macOS, under the folder `getconf` names for your temporary files). With that folder moved elsewhere by hand, through a temporary-folder variable of your shell, pasted images do not show and the formats other than PNG are not converted.
 - `show` takes 64 paths at most per call.
 - Pasted images are read from the folder the engine keeps them in (`<tmp>/claude-<uid>/<project>/<session>/images/`), which no API names.
 - In an expanded tool group (ctrl+o) the rows show no line; the folded group and standalone results do.
