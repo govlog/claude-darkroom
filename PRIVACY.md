@@ -7,8 +7,8 @@ darkroom is a mod for Claude Code. It runs on your computer, inside Claude Code,
 **What it reads**
 
 - The image files that a tool call of your session reads, writes or makes, the ones Claude passes to darkroom's `show` tool, and the images you paste.
-- The text of tool calls (their arguments, and the output of commands and MCP tools) and your draft prompt, only to find image paths and `[Image #N]` markers in them.
-- These environment variables, to know your terminal and your folders: `TERM`, `TERM_PROGRAM`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `TMUX`, `SSH_CONNECTION`, `HOME`, `TMPDIR`.
+- The text of tool calls (their arguments, and the output of commands and MCP tools) and your draft prompt, only to find image paths and `[Image #N]` markers in them. This text goes no further than darkroom: not to a program, not to Claude, not to the network.
+- No environment variable.
 
 **What it keeps**
 
@@ -18,7 +18,7 @@ darkroom is a mod for Claude Code. It runs on your computer, inside Claude Code,
 
 **What Claude gets back.** From the `show` tool, the names of the images it shows and of the ones it skips, with why. Never their pixels or their content.
 
-**What it gives to other programs.** Only what you ask for: the image or its path to your clipboard when you copy it, the image path to your viewer when you open it.
+**What it gives to other programs.** Only what you ask for: the image or its path to your clipboard when you copy it, the image path to your viewer when you open it. ImageMagick, when installed, gets the path of each image that is not a PNG, to convert it on your machine.
 
 The programs darkroom runs, and the exact commands, are in the README, under [Privacy and security](README.md#privacy-and-security).
 

@@ -14,7 +14,8 @@ const VIEWPORT = { columns: 120, rows: 50, isFullscreen: true }
 
 type World = {
   disk: Record<string, number>
-  term?: string
+  /** Whether the terminal draws an Image's pixels; false, and it draws the alt. */
+  pixels?: boolean
   said?: string
   system?: string
   store?: Record<string, unknown>
@@ -26,10 +27,9 @@ type World = {
 // that answer `said`.
 const world = (
   on: On,
-  { disk, term = 'xterm-ghostty', said = '', system = 'Linux', store = {}, hasMagick = true }: World,
+  { disk, pixels = true, said = '', system = 'Linux', store = {}, hasMagick = true }: World,
 ) => {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { HOME: '/home/t', TERM: term, WAYLAND_DISPLAY: 'wayland-0' })
   const saved: Record<string, unknown> = { ...store }
   on('store.get', ($, e) => ({ value: saved[e.key] }))
   on('store.set', ($, e) => {
@@ -84,8 +84,13 @@ const world = (
     const { Text } = $.ui.resolve(e)
     return Text({ children: 'engine row' })
   })
-  on('prompt.submit', ($, e) => ({ text: e.text }))
-  on('ui.blit', () => ({ value: {} }))
+  // The engine takes a blit, or says the Image draws its alt where the terminal draws no pictures.
+  on('ui.blit', ($, e) => ({
+    value:
+      pixels || !('source' in e)
+        ? {}
+        : { deny: 'the Image draws its alt here: the terminal draws no placeholder images (file)' },
+  }))
   on('ui.toast', ($, e) => {
     toasts.push(e.text)
     return { value: undefined }
@@ -145,6 +150,24 @@ const click = async (ui: Drawing, tool: Tool) => {
   await ui.pointer({ type: 'down', x: left + 1, y: 0, button: 'left', in: 'view-hit' })
   await ui.pointer({ type: 'up', x: left + 1, y: 0, button: 'left', in: 'view-hit' })
 }
+
+// The band above the prompt box, and a message of the person, as the transcript draws them.
+const BAND = {
+  plugin: 'darkroom',
+  surface: 'terminal',
+  component: 'AbovePrompt',
+  viewport: VIEWPORT,
+  props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
+} as const
+const message = (text: string) =>
+  ({
+    plugin: 'darkroom',
+    surface: 'terminal',
+    component: 'UserMessage',
+    requestId: `message-${text}`,
+    viewport: VIEWPORT,
+    props: { text, origin: { kind: 'composer' }, isExpanded: false },
+  }) as const
 
 // Pastes image #1 into the prompt box and lets it develop.
 const paste = async ($: Engine, clock: ReturnType<typeof mock.clock>) => {
@@ -283,8 +306,8 @@ test('/darkroom set keeps the setting it names for the next sessions', async ($,
   expect(w.saved.settings).toMatchObject({ develop: false })
 })
 
-test('a terminal without kitty graphics gets the pictures in half-block cells', async ($, on) => {
-  const w = world(on, { disk: { '/work/shot.png': NOW }, term: 'xterm-256color' })
+test('a terminal that draws no pictures gets them in half-block cells', async ($, on) => {
+  const w = world(on, { disk: { '/work/shot.png': NOW }, pixels: false })
   await session($, w.clock, ['magick in.jpg /work/shot.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
   await unroll(ui, w.clock)
@@ -297,28 +320,28 @@ test('a pasted image shows above the prompt box, its marker painted', async ($, 
   const w = world(on, { disk: { [`${PASTES}/1.png`]: NOW } })
   const box = await paste($, w.clock)
   expect(box.decorations).toEqual([{ start: 0, end: 10, color: '#f5a623' }])
-  const band = await $.ui.mount({
-    plugin: 'darkroom',
-    surface: 'terminal',
-    component: 'AbovePrompt',
-    viewport: VIEWPORT,
-    props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
-  })
+  const band = await $.ui.mount(BAND)
   expect((await band.find({ type: 'Image' }))?.props.source).toMatchObject({ file: `${PASTES}/1.png` })
   expect(await band.find({ type: 'Text', text: '[Image #1]' })).toBeDefined()
+  await band.unmount()
+})
+
+test('a sent message takes the pasted thumbnails off the band', async ($, on) => {
+  const w = world(on, { disk: { [`${PASTES}/1.png`]: NOW } })
+  await paste($, w.clock)
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Image' })).toBeDefined()
+  const sent = await $.ui.mount(message('look at this [Image #1]'))
+  await w.clock.advance(0)
+  expect(await band.find({ type: 'Image' })).toBeUndefined()
+  await sent.unmount()
   await band.unmount()
 })
 
 test('a sent message with a pasted image gets a grey line', async ($, on) => {
   const w = world(on, { disk: { [`${PASTES}/1.png`]: NOW } })
   await paste($, w.clock)
-  const ui = await $.ui.mount({
-    plugin: 'darkroom',
-    surface: 'terminal',
-    component: 'UserMessage',
-    viewport: VIEWPORT,
-    props: { text: 'look at this [Image #1]', origin: { kind: 'composer' }, isExpanded: false },
-  })
+  const ui = await $.ui.mount(message('look at this [Image #1]'))
   expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: [Image #1] · 64×32 — click to show')
   await ui.unmount()
 })
@@ -447,15 +470,17 @@ test('resting on a thumbnail offers copy image and copy path', async ($, on) => 
   await ui.unmount()
 })
 
-test('sending a prompt puts the open viewer away', async ($, on) => {
+test('sending a message puts the open viewer away', async ($, on) => {
   const w = world(on, { disk: { '/work/shot.png': NOW } })
   await session($, w.clock, ['magick in.jpg /work/shot.png'])
   const ui = await $.ui.mount(result(w.calls[0]))
   await unroll(ui, w.clock)
   await ui.pointer({ type: 'up', x: 1, y: 1, in: 'strip-hit' })
   expect(await ui.find({ type: 'Image', key: 'view' })).toBeDefined()
-  await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false })
+  const sent = await $.ui.mount(message('next'))
+  await w.clock.advance(0)
   expect(await ui.find({ type: 'Image', key: 'view' })).toBeUndefined()
+  await sent.unmount()
   await ui.unmount()
 })
 

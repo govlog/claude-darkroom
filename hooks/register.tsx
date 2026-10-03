@@ -1,5 +1,5 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { ElementTable, FsStat, Register, RenderSurface } from 'claude-code'
+import type { ElementTable, FsStat, ImageSource, Register, RenderSurface } from 'claude-code'
 
 import type { DarkroomSettings, Print, Verb } from '../types'
 import { fit, gridSize, imagePaths, paint, parsePpm } from './develop'
@@ -17,6 +17,8 @@ const MAX_READ = 4 * 1024 * 1024 // what one $.fs.read may hold: a bigger PNG go
 const PAPER = 0x141414 // what a transparent pixel is laid over
 const MAX_PIXELS = 64_000_000 // a bigger picture is not decoded: seconds and gigabytes for a preview
 const PASTE_TRIES = 8 // the engine may write a pasted image a moment after its marker lands
+const PROBE_MS = 200 // a redraw later, the first picture is up and the engine can say whether it drew it
+const PROBE_TRIES = 10
 
 // The develop: about one second under the safelight.
 const FRAMES = 18
@@ -168,6 +170,7 @@ const gridOf = (print: Print): Grid => ({
   height: print.gridHeight,
   rgb: Uint8Array.fromBase64(print.grid),
 })
+const sourceOf = (print: Print): ImageSource => ({ file: print.png, format: 'png', generation: Math.round(print.mtimeMs) })
 const pastedAs = (print: Print, session: string, n: string) =>
   print.verb === 'pasted' && print.path.endsWith(`/${session}/images/${n}.png`)
 // What a print is called: a pasted one by its marker, the rest by file name.
@@ -272,17 +275,22 @@ const viewerLayout = (row: RowView, current: Print) => {
 
 export const register: Register = on => {
   // What session.start finds out about the machine.
-  let isKitty = false
   let isMac = false
   let cwd = ''
-  let home = ''
   let hasImageMagick = false
+  // Whether the terminal draws an Image's pixels. The engine knows, since it
+  // asks the terminal, and tells once a picture is up: ui.blit on it answers
+  // {} where it shows, and why not where it draws its alt (no kitty graphics,
+  // tmux, the far end of ssh); there the rows paint half-block cells instead.
+  let pixels: 'maybe' | 'yes' | 'no' = 'maybe'
 
   // Set by session.start on the session's own `$`: the work runs off the event
   // that asks for it, so no tool call, edit or press waits on it.
   const queue: Job[] = []
   let wake = () => {}
   let developRow = (_requestId: string, _ids: string[]) => {}
+  let probe = (_requestId: string, _key: string, _source: ImageSource) => {}
+  let putAway = () => {}
   let act = {
     copyImage: async (_print: Print) => {},
     copyPath: async (_print: Print, _surface: RenderSurface) => {},
@@ -295,29 +303,20 @@ export const register: Register = on => {
   const started = new Set<string>()
   // The rows whose viewer is open: one at a time, and none once you move on.
   const openViews = new Set<string>()
+  // The messages of yours drawn so far: a new one puts the pasted thumbnails
+  // and the open viewer away, as the prompt box empties.
+  const seenMessages = new Set<string>()
 
-  const shown = (path: string) =>
-    cwd !== '' && path.startsWith(`${cwd}/`)
-      ? path.slice(cwd.length + 1)
-      : home !== '' && path.startsWith(`${home}/`)
-        ? `~${path.slice(home.length)}`
-        : path
+  const shown = (path: string) => (cwd !== '' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path)
   const where = (print: Print) => (print.verb === 'pasted' ? `${label(print)} (pasted)` : shown(print.path))
-  const expand = (path: string) => (path.startsWith('~/') && home !== '' ? `${home}${path.slice(1)}` : path)
 
   // The drawing helpers take the surface's elements, never `$`.
 
   // A picture as the terminal draws it: real pixels in kitty and Ghostty,
   // half-block cells elsewhere.
   const picture = (els: Elements, print: Print, box: Cells, key: string) =>
-    isKitty ? (
-      <els.Image
-        key={key}
-        source={{ file: print.png, format: 'png', generation: Math.round(print.mtimeMs) }}
-        columns={box.columns}
-        rows={box.rows}
-        alt={label(print)}
-      />
+    pixels !== 'no' ? (
+      <els.Image key={key} source={sourceOf(print)} columns={box.columns} rows={box.rows} alt={label(print)} />
     ) : (
       <els.Raster key={key} columns={box.columns} rows={box.rows} cells={paint(gridOf(print), box, 1)} />
     )
@@ -414,23 +413,20 @@ export const register: Register = on => {
     if (saved !== undefined && typeof saved === 'object') {
       await update($, settings, () => ({ ...DEFAULTS, ...(saved as Partial<DarkroomSettings>) }))
     }
-    const term = `${(await $.env.get('TERM')) ?? ''} ${(await $.env.get('TERM_PROGRAM')) ?? ''}`
-    const isKittyTerm =
-      /kitty|ghostty/i.test(term) ||
-      (await $.env.get('KITTY_WINDOW_ID')) !== undefined ||
-      (await $.env.get('GHOSTTY_RESOURCES_DIR')) !== undefined
-    // The terminal reads the picture from this machine's disk: not through
-    // tmux, not from the far end of ssh. There the rows paint half-block cells.
-    isKitty =
-      isKittyTerm && (await $.env.get('TMUX')) === undefined && (await $.env.get('SSH_CONNECTION')) === undefined
     // macOS, told by a file only macOS has: no program to run for it.
     isMac = await $.fs.exists('/System/Library/CoreServices/SystemVersion.plist').catch(() => false)
-    home = (await $.env.get('HOME')) ?? ''
     cwd = e.cwd
-    const tmp = ((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/+$/, '') || '/tmp'
     const uid = (await $.process.run(['id', '-u']).catch(() => undefined))?.stdout.trim() ?? ''
-    // Claude Code's own temporary folder, readable by this user alone: where
-    // ImageMagick leaves the PNG copy of another format.
+    // Claude Code's own temporary folder, <tmp>/claude-<uid>, readable by this
+    // user alone: where it keeps pasted images and where ImageMagick leaves the
+    // PNG copy of another format. <tmp> is /tmp, or on macOS the user's own
+    // temporary folder, which getconf names; no variable is read for it.
+    // ponytail: a TMPDIR set by hand is not followed; read the folder off the
+    // engine the day it names it.
+    const userTmp = isMac
+      ? (await $.process.run(['getconf', 'DARWIN_USER_TEMP_DIR']).catch(() => undefined))?.stdout.trim()
+      : ''
+    const tmp = (userTmp || '/tmp').replace(/\/+$/, '') || '/tmp'
     const scratch = `${tmp}/claude-${uid}`
     // The ImageMagick policy this plugin ships, in magick/policy.xml.
     const policy = `${$.plugin.root}/magick`
@@ -445,6 +441,7 @@ export const register: Register = on => {
     hasImageMagick = magick !== undefined
     let hasWarned = false
     let isBusy = false
+    let isProbing = false
     let pasteFolder = { session: '', path: '' }
 
     // ponytail: the engine keeps pasted images as <tmp>/claude-<uid>/<project>/
@@ -467,7 +464,7 @@ export const register: Register = on => {
 
     const locate = async (job: Job) => {
       if ('path' in job) {
-        return expand(job.path)
+        return job.path
       }
       const file = await pastedFile(job.paste)
       if (file === undefined && job.tries < PASTE_TRIES) {
@@ -625,6 +622,47 @@ export const register: Register = on => {
       })
     }
 
+    // A new message of yours is on screen: the pasted thumbnails leave the band
+    // and the open viewer goes away, once its drawing is done (a drawing writes
+    // nothing).
+    putAway = () => {
+      $.clock.after(0, async () => {
+        if ((await read($, pasted)).length > 0) {
+          await update($, pasted, () => [])
+        }
+        for (const id of openViews) {
+          await update($, memberOf(viewing, { requestId: id }), () => -1)
+        }
+        openViews.clear()
+      })
+    }
+
+    // Asks the engine whether the picture just drawn shows, and asks again a
+    // few times while it is not up yet or the terminal has not answered.
+    probe = (requestId, key, source) => {
+      if (pixels !== 'maybe' || isProbing) {
+        return
+      }
+      isProbing = true
+      let tries = 0
+      const ask = () =>
+        $.clock.after(PROBE_MS, async () => {
+          const drawn = await $.ui.blit({ requestId, key, source }).catch(() => ({ deny: 'the blit failed' }))
+          tries += 1
+          if (drawn.deny === undefined) {
+            pixels = 'yes'
+          } else if (drawn.deny.includes('draws its alt')) {
+            pixels = 'no'
+            $.ui.invalidate('ui.render')
+          } else if (tries < PROBE_TRIES) {
+            ask()
+            return
+          }
+          isProbing = false
+        })
+      ask()
+    }
+
     act = {
       copyImage: async print => {
         const argv = isMac ? [...MAC_CLIPBOARD, print.png] : ['sh', '-c', LINUX_CLIPBOARD, 'darkroom', print.png]
@@ -717,7 +755,7 @@ export const register: Register = on => {
     const showing: string[] = []
     const skipped: string[] = []
     for (const path of paths.slice(0, ROLL)) {
-      const full = expand(path.trim())
+      const full = path.trim()
       const stat = await $.fs.stat(full.startsWith('/') ? full : `${cwd}/${full}`, { resolve: true }).catch(() => undefined)
       const real = stat?.realPath
       const why =
@@ -767,17 +805,6 @@ export const register: Register = on => {
     return { ...box, decorations: [...(box.decorations ?? []), ...runs] }
   })
 
-  // Sending a prompt clears the pasted thumbnails and puts the open viewers
-  // away. The prompt passes on unchanged.
-  on('prompt.submit', async ($, e, next) => {
-    await update($, pasted, () => [])
-    for (const id of openViews) {
-      await update($, memberOf(viewing, { requestId: id }), () => -1)
-    }
-    openViews.clear()
-    return next(e)
-  })
-
   // The pasted images, as thumbnails right above the prompt box.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const numbers = await read($, pasted)
@@ -787,9 +814,11 @@ export const register: Register = on => {
     const session = await $.session.id()
     const roll = await read($, prints)
     const found = numbers.flatMap(n => roll.filter(one => pastedAs(one, session, String(n))))
-    if (found.length === 0) {
+    const first = found[0]
+    if (first === undefined) {
       return next(e)
     }
+    probe(e.requestId, `paste-${first.id}`, sourceOf(first))
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     const rows = Math.max(2, Math.min(PASTE_ROWS, e.props.maxRows - 1))
@@ -884,6 +913,10 @@ export const register: Register = on => {
         }
       }
     } else if (e.component === 'UserMessage') {
+      if (!seenMessages.has(e.requestId)) {
+        seenMessages.add(e.requestId)
+        putAway()
+      }
       const numbers = [...e.props.text.matchAll(PLACEHOLDER)].map(mark => mark[1] ?? '')
       if (numbers.length > 0) {
         const session = await $.session.id()
@@ -952,6 +985,10 @@ export const register: Register = on => {
     }
     const stripAt = stripLayout(view)
     const viewAt = current === undefined ? undefined : viewerLayout(view, current)
+    const shownFirst = stripAt.visible[0]
+    if (isOpen && hasDeveloped && shownFirst !== undefined) {
+      probe(e.requestId, `thumb-${shownFirst.id}`, sourceOf(shownFirst))
+    }
     return (
       <Box flexDirection="column">
         {row}
