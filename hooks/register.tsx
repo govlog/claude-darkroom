@@ -71,8 +71,10 @@ const SKIP = new Set(['tool', 'tool_use_id', 'agentId', 'content', 'old_string',
 
 // Puts a PNG on the clipboard. macOS: osascript, run directly. Linux: wl-copy
 // reads the picture on its standard input, hence this fixed script, the path
-// its argument and never part of it; wl-copy and xclip fork to serve the
-// clipboard, so their output goes to /dev/null and no pipe of ours stays open.
+// its argument and never part of it. wl-copy goes first and fails at once
+// where there is no Wayland display, then xclip: no variable of the
+// environment is read. Both fork to serve the clipboard, so their output goes
+// to /dev/null and no pipe of ours stays open.
 const MAC_CLIPBOARD = [
   'osascript',
   ...['-e', 'on run argv'],
@@ -80,9 +82,9 @@ const MAC_CLIPBOARD = [
   ...['-e', 'end run'],
 ]
 const LINUX_CLIPBOARD = [
-  '{ if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy; then wl-copy --type image/png <"$1";',
-  'elif command -v xclip; then xclip -selection clipboard -t image/png -i "$1";',
-  'else exit 3; fi; } >/dev/null 2>&1',
+  '{ { command -v wl-copy && wl-copy --type image/png <"$1"; }',
+  '|| { command -v xclip && xclip -selection clipboard -t image/png -i "$1"; }',
+  '|| exit 3; } >/dev/null 2>&1',
 ].join(' ')
 
 // The settings `/darkroom set <name> <value>` changes, kept across sessions.

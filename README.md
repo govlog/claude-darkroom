@@ -133,7 +133,7 @@ darkroom never puts text in a prompt, runs a tool or runs a command of its own a
 - ImageMagick (`magick`, or `convert` and `identify`), for the other formats only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and runs it under [`magick/policy.xml`](magick/policy.xml): those formats and nothing else, no delegate program, no network, no indirect file lists, bounded memory, size and time.
 - `magick -version`, or else `convert -version`, once per session: to see whether ImageMagick is installed, and which version.
 - `id -u`, once per session, and on macOS `getconf DARWIN_USER_TEMP_DIR`: to find Claude Code's own temporary folder, `<tmp>/claude-<uid>`, where it keeps your pasted images and where ImageMagick leaves its PNG copies. `<tmp>` is `/tmp` on Linux and the folder `getconf` names on macOS: darkroom reads no environment variable. macOS is told from Linux by a file only macOS has, with no program.
-- To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file (or runs `xclip` on X11), the path passed as an argument, never part of the script.
+- To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file, or runs `xclip` where `wl-copy` is missing or fails (no Wayland display), the path passed as an argument, never part of the script. It reads no variable of the environment.
 - Your opener, when you press open: `open` on macOS, `setsid -f xdg-open` on Linux so the viewer outlives the call, or the command you set.
 
 **The exact commands.** Every program darkroom can run, as it runs it: `<image>` is the absolute path of the image, `<png>` the image itself or its PNG copy, `<id>` a hash of the path and its date, `W`×`H` the size of the pixel grid. The path is always one argument of its own, never part of a script:
@@ -153,7 +153,7 @@ magick 'JPEG:<image>[0]' -background '#141414' -flatten -resize 'WxH!' -depth 8 
 # copy image, on macOS
 osascript -e 'on run argv' -e 'set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)' -e 'end run' '<png>'
 # copy image, on Linux
-sh -c '{ if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy; then wl-copy --type image/png <"$1"; elif command -v xclip; then xclip -selection clipboard -t image/png -i "$1"; else exit 3; fi; } >/dev/null 2>&1' darkroom '<png>'
+sh -c '{ { command -v wl-copy && wl-copy --type image/png <"$1"; } || { command -v xclip && xclip -selection clipboard -t image/png -i "$1"; } || exit 3; } >/dev/null 2>&1' darkroom '<png>'
 
 # open, on macOS; an opener you set runs in place of open
 open '<image>'
