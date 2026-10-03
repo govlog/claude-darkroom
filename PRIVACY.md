@@ -14,11 +14,11 @@ darkroom is a mod for Claude Code. It runs on your computer, inside Claude Code,
 
 - A small pixel grid of each image, in the session's state in Claude Code.
 - Your darkroom settings, in the plugin's store in Claude Code, until you change them.
-- For an image that is not a PNG, ImageMagick writes a PNG copy into Claude Code's own temporary folder, which only you can read.
+- For an image that is not a PNG, ImageMagick or rsvg-convert writes a PNG copy into Claude Code's own temporary folder, which only you can read.
 
 **What Claude gets back.** From the `show` tool, the names of the images it shows and of the ones it skips, with why. Never their pixels or their content.
 
-**What it gives to other programs.** Only what you ask for: the image or its path to your clipboard when you copy it, the image path to your viewer when you open it. ImageMagick, when installed, gets the path of each image that is not a PNG, to convert it on your machine.
+**What it gives to other programs.** Only what you ask for: the image or its path to your clipboard when you copy it, the image path to your viewer when you open it. ImageMagick, or rsvg-convert for an SVG, when installed, gets the path of each image that is not a PNG, to convert it on your machine.
 
 The programs darkroom runs, and the exact commands, are in the README, under [Privacy and security](README.md#privacy-and-security).
 

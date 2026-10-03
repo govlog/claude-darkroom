@@ -20,6 +20,7 @@ type World = {
   system?: string
   store?: Record<string, unknown>
   hasMagick?: boolean
+  hasRsvg?: boolean
 }
 
 // What lies beneath the plugin: a disk (path → mtime), ImageMagick, a
@@ -27,7 +28,7 @@ type World = {
 // that answer `said`.
 const world = (
   on: On,
-  { disk, pixels = true, said = '', system = 'Linux', store = {}, hasMagick = true }: World,
+  { disk, pixels = true, said = '', system = 'Linux', store = {}, hasMagick = true, hasRsvg = true }: World,
 ) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: Record<string, unknown> = { ...store }
@@ -65,8 +66,14 @@ const world = (
     runs.push([...e.argv])
     envs.push({ ...e.init?.env })
     const line = e.argv.join(' ')
-    if (!hasMagick && line.endsWith('-version')) {
+    const isMissing =
+      (!hasMagick && /^(magick|convert) -version$/.test(line)) || (!hasRsvg && line === 'rsvg-convert --version')
+    if (isMissing) {
       return { value: { exitCode: 127, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    // rsvg-convert leaves the PNG copy it was asked for on the disk.
+    if (e.argv[0] === 'rsvg-convert' && e.argv.includes('--output')) {
+      disk[e.argv[e.argv.indexOf('--output') + 1] ?? ''] = NOW
     }
     const stdout =
       line === 'id -u' ? '1000\n' : line.includes('identify') ? '640 320 JPEG' : line.endsWith('ppm:-') ? PIXMAP : ''
@@ -528,15 +535,36 @@ test('a PNG develops in the sandbox, with no program run on it', async ($, on) =
   await ui.unmount()
 })
 
-test("ImageMagick runs only under darkroom's policy, with the decoder the extension names", async ($, on) => {
+test('ImageMagick runs with the decoder the extension names and its limits on the command line, nothing in its environment', async ($, on) => {
   const w = world(on, { disk: { '/work/photo.jpg': NOW } })
   await session($, w.clock, ['make /work/photo.jpg'])
   const calls = w.runs.flatMap((argv, i) => (argv.some(arg => arg.includes('/work/photo.jpg')) ? [{ argv, env: w.envs[i] }] : []))
   expect(calls.length).toBeGreaterThan(0)
   for (const { argv, env } of calls) {
     expect(argv).toContain('JPEG:/work/photo.jpg[0]')
-    expect(env?.MAGICK_CONFIGURE_PATH?.endsWith('/magick'), 'the policy folder').toBe(true)
+    expect(argv.join(' ')).toContain(
+      '-limit memory 256MiB -limit map 512MiB -limit disk 1GiB -limit area 64MP -limit width 16KP -limit height 16KP -limit time 30',
+    )
+    expect(env).toEqual({})
   }
+})
+
+test('an SVG is drawn by rsvg-convert into a PNG copy, with no ImageMagick', async ($, on) => {
+  const w = world(on, { disk: { '/work/logo.svg': NOW } })
+  await session($, w.clock, ['make /work/logo.svg'])
+  const drawn = w.runs.find(argv => argv[0] === 'rsvg-convert' && argv.includes('/work/logo.svg'))
+  expect(drawn?.slice(1, 9)).toEqual(['--width', '1024', '--height', '1024', '--keep-aspect-ratio', '--format', 'png', '--output'])
+  expect(drawn?.[9]).toMatch(/^\/tmp\/claude-1000\/darkroom-[0-9a-f]{16}\.png$/)
+  expect(w.runs.some(argv => argv[0] !== 'rsvg-convert' && argv.some(arg => arg.includes('logo.svg'))), 'no other program sees it').toBe(false)
+  const ui = await $.ui.mount(result(w.calls[0]))
+  expect((await ui.find({ key: 'toggle' }))?.text).toBe('● darkroom: logo.svg · 64×32 — click to show')
+  await ui.unmount()
+})
+
+test('without rsvg-convert, an SVG says what it needs', async ($, on) => {
+  const w = world(on, { disk: { '/work/logo.svg': NOW }, hasRsvg: false })
+  await session($, w.clock, ['make /work/logo.svg'])
+  expect(w.toasts).toContain('◐ darkroom: install librsvg (rsvg-convert) to see SVG images')
 })
 
 test('without ImageMagick, a PNG still develops and a JPEG says what it needs', async ($, on) => {

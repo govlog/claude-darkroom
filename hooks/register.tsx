@@ -53,7 +53,8 @@ const KEYS: Record<string, Tool> = {
 const PLACEHOLDER = /\[Image #(\d+)\]/g
 const ROLL_LINE = /^(?:darkroom: )*\d+ prints? on the roll\.$/
 // The ImageMagick decoder each extension gets, named in front of the path: it
-// never guesses a format from a file's bytes. PNG has its own decoder here.
+// never guesses a format from a file's bytes. PNG has its own decoder here,
+// and an SVG goes to rsvg-convert.
 const CODERS: Record<string, string> = {
   png: 'PNG',
   jpg: 'JPEG',
@@ -61,11 +62,24 @@ const CODERS: Record<string, string> = {
   gif: 'GIF',
   webp: 'WEBP',
   avif: 'AVIF',
-  svg: 'MSVG',
   bmp: 'BMP',
   tif: 'TIFF',
   tiff: 'TIFF',
 }
+const EXTENSIONS = new Set([...Object.keys(CODERS), 'svg'])
+// What ImageMagick may use for one image, set on its command line: memory,
+// disk, size and time.
+const LIMITS = [
+  ...['-limit', 'memory', '256MiB'],
+  ...['-limit', 'map', '512MiB'],
+  ...['-limit', 'disk', '1GiB'],
+  ...['-limit', 'area', '64MP'],
+  ...['-limit', 'width', '16KP'],
+  ...['-limit', 'height', '16KP'],
+  ...['-limit', 'time', '30'],
+]
+// How rsvg-convert draws an SVG: at most 1024 pixels on its long side, its shape kept.
+const RSVG_BOX = ['--width', '1024', '--height', '1024', '--keep-aspect-ratio']
 // Tool arguments that hold file contents, not paths the call worked on.
 const SKIP = new Set(['tool', 'tool_use_id', 'agentId', 'content', 'old_string', 'new_string'])
 
@@ -192,7 +206,7 @@ const unfit = (stat: FsStat) =>
     ? 'not an image file'
     : stat.size > MAX_BYTES
       ? 'over 64 MB'
-      : CODERS[extensionOf(stat.realPath ?? '')] === undefined
+      : !EXTENSIONS.has(extensionOf(stat.realPath ?? ''))
         ? `not a format darkroom shows (${FORMATS})`
         : ''
 
@@ -280,6 +294,7 @@ export const register: Register = on => {
   let isMac = false
   let cwd = ''
   let hasImageMagick = false
+  let hasRsvgConvert = false
   // Whether the terminal draws an Image's pixels. The engine knows, since it
   // asks the terminal, and tells once a picture is up: ui.blit on it answers
   // {} where it shows, and why not where it draws its alt (no kitty graphics,
@@ -310,6 +325,15 @@ export const register: Register = on => {
   const seenMessages = new Set<string>()
 
   const shown = (path: string) => (cwd !== '' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path)
+  // The program a format needs and does not have, or ''.
+  const needs = (extension: string) =>
+    extension === 'svg'
+      ? hasRsvgConvert
+        ? ''
+        : 'needs rsvg-convert (librsvg)'
+      : extension !== 'png' && !hasImageMagick
+        ? 'needs ImageMagick'
+        : ''
   const where = (print: Print) => (print.verb === 'pasted' ? `${label(print)} (pasted)` : shown(print.path))
 
   // The drawing helpers take the surface's elements, never `$`.
@@ -430,8 +454,6 @@ export const register: Register = on => {
       : ''
     const tmp = (userTmp || '/tmp').replace(/\/+$/, '') || '/tmp'
     const scratch = `${tmp}/claude-${uid}`
-    // The ImageMagick policy this plugin ships, in magick/policy.xml.
-    const policy = `${$.plugin.root}/magick`
     const hasMagick7 = (await $.process.run(['magick', '-version']).catch(() => undefined))?.exitCode === 0
     const hasMagick6 =
       !hasMagick7 && (await $.process.run(['convert', '-version']).catch(() => undefined))?.exitCode === 0
@@ -441,7 +463,9 @@ export const register: Register = on => {
         ? { convert: ['convert'], identify: ['identify'] }
         : undefined
     hasImageMagick = magick !== undefined
+    hasRsvgConvert = (await $.process.run(['rsvg-convert', '--version']).catch(() => undefined))?.exitCode === 0
     let hasWarned = false
+    let hasWarnedSvg = false
     let isBusy = false
     let isProbing = false
     let pasteFolder = { session: '', path: '' }
@@ -497,10 +521,6 @@ export const register: Register = on => {
         return known
       }
       const extension = extensionOf(real)
-      const coder = CODERS[extension]
-      if (coder === undefined) {
-        return undefined
-      }
       const id = await digest(`${real}:${stat.mtimeMs}`)
       const print = {
         id,
@@ -512,18 +532,45 @@ export const register: Register = on => {
         at: await $.clock.now(),
       }
 
-      // A PNG needs no program: it is decoded here, in the mod's sandbox, and
-      // the terminal draws it straight from its file.
-      if (extension === 'png' && stat.size <= MAX_READ) {
-        const file = await $.fs.read(real, { as: 'bytes' })
-        const bytes = Uint8Array.fromBase64(file.base64)
+      // A PNG's size and pixel grid, read and decoded here, in the mod's sandbox.
+      const fromPng = async (file: string) => {
+        const bytes = Uint8Array.fromBase64((await $.fs.read(file, { as: 'bytes' })).base64)
         const { width, height } = pngHeader(bytes)
         const grid = decodePng(bytes, SIDE, MAX_PIXELS, PAPER)
-        return { ...print, png: real, width, height, format: 'PNG', grid: grid.rgb.toBase64(), gridWidth: grid.width, gridHeight: grid.height }
+        return { width, height, grid: grid.rgb.toBase64(), gridWidth: grid.width, gridHeight: grid.height }
       }
 
-      // Any other format goes to ImageMagick, when it is installed, under the
-      // plugin's own policy: these formats only, no delegate, no network.
+      // A PNG needs no program: the terminal draws it straight from its file.
+      if (extension === 'png' && stat.size <= MAX_READ) {
+        return { ...print, png: real, format: 'PNG', ...(await fromPng(real)) }
+      }
+
+      // An SVG is drawn by rsvg-convert into a PNG copy, which gives the size
+      // and the grid. librsvg renders in its own process: no script, no
+      // program, no network, no file outside the SVG's own folder.
+      if (extension === 'svg') {
+        if (!hasRsvgConvert) {
+          if (!hasWarnedSvg) {
+            hasWarnedSvg = true
+            $.ui.toast('◐ darkroom: install librsvg (rsvg-convert) to see SVG images')
+          }
+          return undefined
+        }
+        const png = `${scratch}/darkroom-${id}.png`
+        const drawn = await $.process.run(['rsvg-convert', ...RSVG_BOX, ...['--format', 'png', '--output', png], real])
+        const copy = drawn.exitCode === 0 ? await $.fs.stat(png).catch(() => undefined) : undefined
+        if (copy === undefined || copy.size > MAX_READ) {
+          return undefined
+        }
+        return { ...print, png, format: 'SVG', ...(await fromPng(png)) }
+      }
+
+      // Any other format goes to ImageMagick, when it is installed: the decoder
+      // the extension names, its memory, size and time bounded on the command line.
+      const coder = CODERS[extension]
+      if (coder === undefined) {
+        return undefined
+      }
       if (magick === undefined) {
         if (!hasWarned) {
           hasWarned = true
@@ -531,9 +578,9 @@ export const register: Register = on => {
         }
         return undefined
       }
-      const run = (argv: string[]) => $.process.run(argv, { env: { MAGICK_CONFIGURE_PATH: policy } })
+      const run = (argv: string[]) => $.process.run(argv)
       const source = `${coder}:${real}[0]`
-      const shape = await run([...magick.identify, '-format', '%w %h %m', source])
+      const shape = await run([...magick.identify, ...LIMITS, '-format', '%w %h %m', source])
       const [wide, high, format = '?'] = shape.stdout.trim().split(/\s+/)
       const width = Number(wide)
       const height = Number(high)
@@ -543,7 +590,7 @@ export const register: Register = on => {
       let png = real
       if (format !== 'PNG') {
         png = `${scratch}/darkroom-${id}.png`
-        const made = await run([...magick.convert, source, '-resize', '2048x2048>', `PNG:${png}`])
+        const made = await run([...magick.convert, ...LIMITS, source, '-resize', '2048x2048>', `PNG:${png}`])
         if (made.exitCode !== 0) {
           return undefined
         }
@@ -551,6 +598,7 @@ export const register: Register = on => {
       const grid = gridSize(width, height, SIDE)
       const pixmap = await run([
         ...magick.convert,
+        ...LIMITS,
         source,
         ...['-background', '#141414', '-flatten'],
         ...['-resize', `${grid.width}x${grid.height}!`],
@@ -763,7 +811,7 @@ export const register: Register = on => {
       const why =
         stat === undefined || real === undefined
           ? 'no such file'
-          : unfit(stat) || (extensionOf(real) !== 'png' && !hasImageMagick ? 'needs ImageMagick' : '')
+          : unfit(stat) || needs(extensionOf(real))
       if (why !== '' || real === undefined) {
         skipped.push(`${path}: ${why}`)
         continue

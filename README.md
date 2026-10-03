@@ -24,11 +24,11 @@ In Claude Code, type:
 /plugin install darkroom@claude-darkroom
 ```
 
-Then start a new session. PNG images need nothing more. For JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF, also install ImageMagick:
+Then start a new session. PNG images need nothing more. For JPEG, GIF, WebP, AVIF, BMP and TIFF, also install ImageMagick; for SVG, librsvg's `rsvg-convert`:
 
 ```
-brew install imagemagick        # macOS
-sudo apt install imagemagick    # Debian, Ubuntu
+brew install imagemagick librsvg             # macOS
+sudo apt install imagemagick librsvg2-bin    # Debian, Ubuntu
 ```
 
 ### Which terminal
@@ -101,7 +101,8 @@ A setting applies at once and is kept for the next sessions.
 | | |
 |---|---|
 | Claude Code | 2.1.287 or newer, in fullscreen mode for clicks and hover |
-| ImageMagick | only for JPEG, GIF, WebP, AVIF, SVG, BMP and TIFF: 7 (`magick`), or 6 (`convert`, `identify`) |
+| ImageMagick | only for JPEG, GIF, WebP, AVIF, BMP and TIFF: 7 (`magick`), or 6 (`convert`, `identify`) |
+| librsvg | only for SVG: `rsvg-convert` |
 | Terminal | Ghostty or kitty for real pictures, on Linux (Wayland or X11) or macOS |
 | Clipboard | to copy an image: `wl-copy` on Wayland, `xclip` on X11, `osascript` on macOS |
 
@@ -114,7 +115,7 @@ A setting applies at once and is kept for the next sessions.
 - `show` is a tool darkroom declares for Claude, `mcp__darkroom__show`. Claude passes it image paths. darkroom checks each one, puts it on a strip under the call, and answers with the names it shows and the ones it skipped, with why.
 - A PNG is read and decoded by darkroom itself, inside the mod's sandbox: its size from its header, and the small pixel grid the develop and the half-block fallback paint from. The terminal draws the picture straight from the file.
 - Whether your terminal draws pictures is Claude Code's to know, and darkroom asks it once the first picture is up (`$.ui.blit` on it answers, or says the picture is not drawn). Where the terminal draws none, in tmux, or at the far end of ssh, the rows paint half-block cells from the pixel grid instead. darkroom reads no environment variable, for this or for anything else.
-- Any other format goes to ImageMagick, under the policy darkroom ships: it reads the size, writes a PNG copy into Claude Code's own temporary folder and prints the pixel grid.
+- An SVG goes to `rsvg-convert`, which draws it, at most 1024 pixels on its long side, into a PNG copy in Claude Code's own temporary folder; the copy gives the size and the pixel grid. Any other format goes to ImageMagick, its memory, size and time bounded on the command line: it reads the size, writes a PNG copy there and prints the pixel grid.
 - The rows are `ui.render` hooks on tool results, tool groups, your messages and the output of `/darkroom`. Each picture is an `Image` element: Claude Code passes it to the terminal with the kitty graphics protocol. A clear `Client` layer over the pictures and the viewer's toolbar takes the clicks, the hover and the keys, and never draws, so the pictures stay. A press over it never reaches the transcript: a quick click or one that slips never selects text.
 
 </details>
@@ -123,15 +124,16 @@ A setting applies at once and is kept for the next sessions.
 
 In short: darkroom works on your machine only. It makes no network call and collects nothing, and Claude never gets the pixels of an image through it. The privacy policy is in [PRIVACY.md](PRIVACY.md); below, every program darkroom runs, and why.
 
-**What darkroom sends, and where.** Nothing leaves your machine. What darkroom reads (image files, the text of tool calls, your draft prompt) goes to your screen and to the session's state, and nowhere else: not to a program, not to Claude, not to the network. What does leave darkroom is, at your click, an image or its path to your clipboard and an image path to your image viewer; and, for an image that is not a PNG, its path to ImageMagick on your machine, which converts it. No program darkroom runs gets a word of the conversation.
+**What darkroom sends, and where.** Nothing leaves your machine. What darkroom reads (image files, the text of tool calls, your draft prompt) goes to your screen and to the session's state, and nowhere else: not to a program, not to Claude, not to the network. What does leave darkroom is, at your click, an image or its path to your clipboard and an image path to your image viewer; and, for an image that is not a PNG, its path to ImageMagick or to `rsvg-convert` on your machine, which convert it. No program darkroom runs gets a word of the conversation.
 
 darkroom never puts text in a prompt, runs a tool or runs a command of its own accord.
 
 **Programs it runs, and why.** Each by name with its arguments, the image path always one argument of its own:
 
 - No program for a PNG: darkroom decodes it in its own sandbox, with no access to files, programs or the network beyond what Claude Code hands it.
-- ImageMagick (`magick`, or `convert` and `identify`), for the other formats only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and runs it under [`magick/policy.xml`](magick/policy.xml): those formats and nothing else, no delegate program, no network, no indirect file lists, bounded memory, size and time. The policy reaches ImageMagick as its configure path, given to that one process and to nothing else, on top of the system's own policy.
-- `magick -version`, or else `convert -version`, once per session: to see whether ImageMagick is installed, and which version.
+- ImageMagick (`magick`, or `convert` and `identify`), for JPEG, GIF, WebP, AVIF, BMP and TIFF only: to read the size, to convert the image to PNG for the terminal, and to make the small pixel grid. darkroom names the decoder from the file's extension (`JPEG:`, `GIF:`…), so ImageMagick never guesses a format from a file's bytes, and for these formats runs no program of its own; its memory, disk, size and time are bounded on the command line (`-limit`). Nothing is set in its environment.
+- `rsvg-convert` (librsvg), for SVG only: to draw the image, at most 1024 pixels on its long side, into a PNG copy. librsvg renders in its own process and ignores scripts, loads no external XML entity, caps the elements it reads, and takes an outside reference (`<image>`, `xi:include`, a stylesheet) only from a `data:` URI or a file beside the SVG, never from the network.
+- `magick -version` (or else `convert -version`) and `rsvg-convert --version`, once per session: to see whether each is installed.
 - `id -u`, once per session, and on macOS `getconf DARWIN_USER_TEMP_DIR`: to find Claude Code's own temporary folder, `<tmp>/claude-<uid>`, where it keeps your pasted images and where ImageMagick leaves its PNG copies. `<tmp>` is `/tmp` on Linux and the folder `getconf` names on macOS: darkroom reads no environment variable. macOS is told from Linux by a file only macOS has, with no program.
 - To copy an image: `osascript` on macOS, run directly. On Linux, `sh -c` with one fixed script, because `wl-copy` reads the picture on its standard input: the script hands it the file, or runs `xclip` where `wl-copy` is missing or fails (no Wayland display), the path passed as an argument, never part of the script. It reads no variable of the environment.
 - Your opener, when you press open: `open` on macOS, `setsid -f xdg-open` on Linux so the viewer outlives the call, or the command you set.
@@ -143,12 +145,17 @@ darkroom never puts text in a prompt, runs a tool or runs a command of its own a
 id -u
 getconf DARWIN_USER_TEMP_DIR     # macOS only
 magick -version                  # or, without ImageMagick 7: convert -version
+rsvg-convert --version
 
-# a JPEG, GIF, WebP, AVIF, SVG, BMP or TIFF image, under the policy file in <plugin>/magick
+# an SVG image
+rsvg-convert --width 1024 --height 1024 --keep-aspect-ratio --format png --output '<tmp>/claude-<uid>/darkroom-<id>.png' '<image>'
+
+# a JPEG, GIF, WebP, AVIF, BMP or TIFF image; LIMITS stands for
+#   -limit memory 256MiB -limit map 512MiB -limit disk 1GiB -limit area 64MP -limit width 16KP -limit height 16KP -limit time 30
 # (JPEG: stands for the decoder the extension names; ImageMagick 6 runs convert and identify)
-magick identify -format '%w %h %m' 'JPEG:<image>[0]'
-magick 'JPEG:<image>[0]' -resize '2048x2048>' 'PNG:<tmp>/claude-<uid>/darkroom-<id>.png'
-magick 'JPEG:<image>[0]' -background '#141414' -flatten -resize 'WxH!' -depth 8 -compress none ppm:-
+magick identify LIMITS -format '%w %h %m' 'JPEG:<image>[0]'
+magick LIMITS 'JPEG:<image>[0]' -resize '2048x2048>' 'PNG:<tmp>/claude-<uid>/darkroom-<id>.png'
+magick LIMITS 'JPEG:<image>[0]' -background '#141414' -flatten -resize 'WxH!' -depth 8 -compress none ppm:-
 
 # copy image, on macOS
 osascript -e 'on run argv' -e 'set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)' -e 'end run' '<png>'
@@ -169,7 +176,7 @@ setsid -f xdg-open '<image>'
 - `command.run` answers `/darkroom` and nothing else; darkroom runs no command of its own through it.
 - `ui.render` and `ui.message` draw the rows and take the clicks, hover and keys over them. The first drawing of a new message of yours puts the pasted thumbnails and the open viewer away; the first picture drawn asks Claude Code whether your terminal shows it.
 
-**What it reads and writes.** It reads the images a tool call names, the ones Claude passes to `show`, and your pasted images. It reads no environment variable. darkroom itself writes no file: it keeps a small pixel grid per image in the session's state and your settings in its store. Only ImageMagick writes, for a non-PNG image: its PNG copy, in Claude Code's own temporary folder, which only you can read.
+**What it reads and writes.** It reads the images a tool call names, the ones Claude passes to `show`, and your pasted images. It reads no environment variable. darkroom itself writes no file: it keeps a small pixel grid per image in the session's state and your settings in its store. Only ImageMagick and `rsvg-convert` write, for an image that is not a PNG: its PNG copy, in Claude Code's own temporary folder, which only you can read.
 
 **The tests.** `tests/` stand in for Claude Code: they answer `process.run`, `tool.call`, the store and the rest, and call `tool.call`, `command.run` and `prompt.submit` the way Claude Code does, to check how the mod reacts. The mod itself makes none of those calls. `demo/make-images.sh` draws the screenshot images with ImageMagick.
 
